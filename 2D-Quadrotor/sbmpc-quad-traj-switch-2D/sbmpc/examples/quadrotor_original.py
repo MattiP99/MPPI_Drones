@@ -10,7 +10,7 @@ os.environ['XLA_FLAGS'] = (
 import matplotlib.pyplot as plt
 from matplotlib import rc
 import sys
-sys.path.append('/home/mpiras/MPPI/sbmpc-quad-traj-switch-2D-TEST/sbmpc')
+sys.path.append('/home/mpiras/MPPI/MPPI_Drones/2D-Quadrotor/sbmpc-quad-traj-switch-2D/sbmpc')
 from sbmpc.model import Model, ModelMjx
 from sbmpc.solvers import SbMPC, BaseObjective
 from sbmpc.utils.settings import ConfigMPC, ConfigGeneral
@@ -187,11 +187,11 @@ def func_taut(state,inputs,csi,csi_dot):
     # Solving for Load Acceleration
     
     
-    acc_L = - jnp.transpose(tension_vector).reshape(3,) / mass_payload - jnp.array([0.,0.,gravity])
+    acc_L =  jnp.transpose(tension_vector).reshape(3,) / mass_payload - jnp.array([0.,0.,gravity])
     print("tension_vector taut TRANSPOST",jnp.transpose(tension_vector).reshape(3,))
     print("acc_L taut",acc_L)
     # Solving for Quadrotor Acceleration
-    acc = (quad_force_vector + jnp.transpose(tension_vector).reshape(3,)) / mass - jnp.array([0.,0.,gravity])
+    acc = (quad_force_vector - jnp.transpose(tension_vector).reshape(3,)) / mass - jnp.array([0.,0.,gravity])
     print("acc taut",acc)
     acc_L  = acc_L.reshape(3,)
     acc  = acc.reshape(3,)
@@ -221,6 +221,7 @@ def func_taut(state,inputs,csi,csi_dot):
     #v_kp1 = state[self.nq:] + self.bt * state_dot[-6:]#self.dynamics(state, inputs)[self.nq:]
         
     return state_dot
+
 """
 def func_taut(state,inputs,csi,csi_dot):
 
@@ -302,9 +303,10 @@ def check_distance(state, csi,csi_dot,is_slack):
     uav_attach_vector =  state[3:6] - state[0:3] 
     uav_attach_distance = jnp.linalg.norm(uav_attach_vector)
     if is_slack == False:
-        if uav_attach_distance > cable_length - 0.001:
+        if uav_attach_distance > cable_length:# 0.001:
             csi = uav_attach_vector/uav_attach_distance
-            state = state.at[0:3].set(state[3:6] - cable_length * csi)
+            #state = state.at[0:3].set(state[3:6] - cable_length * csi)
+            state = state.at[3:6].set(state[0:3] + cable_length * csi)
             
         else:
             is_slack = True
@@ -316,6 +318,7 @@ def check_distance(state, csi,csi_dot,is_slack):
             is_slack = False
             #state = state.at[0:3].set(state[3:6] - cable_length * csi)
         return state, is_slack
+    
 """
 # NOTE: Not re-imposing the state of the drone
 def check_distance(state, csi,csi_dot,is_slack):
@@ -437,7 +440,7 @@ class Simulation(simulation.Simulator):
         # WHICH SHAPE DOES IT HAVE?
         #x = jnp.arange(0, 500, 0.1) 
         #CASE 2- OSCILLLATION HORIZONTALLY
-        x = jnp.arange(0, 400, 0.1) 
+        x = jnp.arange(0, 500, 0.1) 
         x1 = jnp.arange(0, 100, 0.1) 
         
         
@@ -445,7 +448,7 @@ class Simulation(simulation.Simulator):
         #input_sequence =  jnp.array([(mass+mass_payload)*gravity/2 , (mass + mass_payload)*gravity/2 ])
 
         # INPUT SINUSOIDAL
-        #input_sequence =  jnp.array([(mass+mass_payload)*gravity + 2 * jnp.sin(0.1*x) , (mass + mass_payload)*gravity + 2 * jnp.sin(0.1*x + 1)])
+        #input_sequence =  jnp.array([0.5*(mass+mass_payload)*gravity + 10 * jnp.sin(0.05*x) , 0.5*(mass + mass_payload)*gravity + 10 * jnp.sin(0.05*x)])
         
         # INPUT ASCENDING WHILE TURNING IN ONE DIRECTION
         #input_sequence =  jnp.array([(mass+mass_payload)*gravity , 0.9* (mass + mass_payload)*gravity])
@@ -460,15 +463,17 @@ class Simulation(simulation.Simulator):
 
         
         # INPUT ASCENDING WHILE OSCILLATING HORIZONTALLY 2
-        #input_sequence_1 =  jnp.array([(mass+mass_payload)*gravity/2 + 2 , (mass + mass_payload)*gravity/2 + 2 ])
-        #input_sequence_1 = jnp.tile(input_sequence_1, (1000, 1)) 
+        input_sequence_1 =  jnp.array([(mass+mass_payload)*gravity/2 + 8 , (mass + mass_payload)*gravity/2 + 8 ])
+        input_sequence_1 = jnp.tile(input_sequence_1, (1000, 1)) 
         
-        input_sequence_1 =  jnp.array([((mass+mass_payload)*gravity + 1)/2 + (2 * jnp.sin(0.1*x1))/2 ,
-                                      ((mass+mass_payload)*gravity + 1)/2 - (2 * jnp.sin(0.1*x1))/2])
-        input_sequence_1 = input_sequence_1.reshape(1000,2)
-        input_sequence_2 =  jnp.array([((mass+mass_payload)*gravity + 1)/2 + (2 * jnp.sin(0.05*x))/2 ,
-                                      ((mass+mass_payload)*gravity + 1)/2 - (2 * jnp.sin(0.05*x))/2])
-        input_sequence_2 = input_sequence_2.reshape(4000,2)
+        #input_sequence_1 =  jnp.array([((mass+mass_payload)*gravity + 1)/2 + (20 * jnp.sin(0.1*x1))/2 ,
+        #                              ((mass+mass_payload)*gravity + 1)/2 - (20 * jnp.sin(0.1*x1))/2])
+        #input_sequence_1 = input_sequence_1.reshape(1000,2)
+        #input_sequence_2 =  jnp.array([((mass+mass_payload)*gravity + 1)/2 + (20 * jnp.sin(0.05*x))/2 ,
+        #                              ((mass+mass_payload)*gravity + 1)/2 - (20 * jnp.sin(0.05*x))/2])
+        input_sequence_2 =  jnp.array([-(mass+mass_payload)*gravity/2 - 80 , -(mass + mass_payload)*gravity/2 - 80 ])
+        input_sequence_2 = jnp.tile(input_sequence_2, (4000, 1)) 
+        #input_sequence_2 = input_sequence_2.reshape(2500,2)
         input_sequence = jnp.concatenate([input_sequence_1,input_sequence_2],axis=0)
 
 
@@ -654,8 +659,8 @@ if __name__ == "__main__":
 
     plt.figure()
     # Plot the input trajectory
-    plt.plot(sim.input_traj[:,0] - sim.input_traj[:,1])
-    plt.legend(["u1 - u2"])
+    plt.plot((drone_length *(sim.input_traj[:,0] - sim.input_traj[:,1]))/inertia_slack)
+    plt.legend(["torque"])
     plt.show()
 
 
