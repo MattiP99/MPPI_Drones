@@ -45,7 +45,7 @@ e3 = jnp.array([0.,0.,1.],dtype=jnp.float32)
 input_hover = 0.5 * jnp.array([(mass+mass_payload)*gravity, (mass+mass_payload)*gravity], dtype=jnp.float32)
 nq = 7
 
-dt = 0.001
+dt = 0.02
 ### DEFINE SYSTEM STATE and INPUTS ####
 # X = [x, x_L, dotx, dotx_L ] = [12,1]
 #     [3   3 ,   3      3    ]
@@ -182,16 +182,20 @@ def func_taut(state,inputs,csi,csi_dot):
 
     print("quad_centrifugal_f taut",quad_centrifugal_f)
 
-    tension_vector = mass_payload * (-csi.reshape(1,3) @ quad_force_vector + quad_centrifugal_f) * csi.reshape(3,1) / (mass+mass_payload)
+    #tension_vector = mass_payload * (-csi.reshape(1,3) @ quad_force_vector + quad_centrifugal_f) * csi.reshape(3,1) / (mass+mass_payload)
+    tension_vector = mass_payload * (-csi @ quad_force_vector + quad_centrifugal_f) * csi / (mass+mass_payload)
     print("tension_vectortaut",tension_vector)
     # Solving for Load Acceleration
     
     
-    acc_L =  jnp.transpose(tension_vector).reshape(3,) / mass_payload - jnp.array([0.,0.,gravity])
+    #acc_L =  jnp.transpose(tension_vector).reshape(3,) / mass_payload - jnp.array([0.,0.,gravity])
+    acc_L =  -tension_vector / mass_payload - jnp.array([0.,0.,gravity])
     print("tension_vector taut TRANSPOST",jnp.transpose(tension_vector).reshape(3,))
     print("acc_L taut",acc_L)
     # Solving for Quadrotor Acceleration
-    acc = (quad_force_vector - jnp.transpose(tension_vector).reshape(3,)) / mass - jnp.array([0.,0.,gravity])
+    #acc = (quad_force_vector - jnp.transpose(tension_vector).reshape(3,)) / mass - jnp.array([0.,0.,gravity])
+    acc = (quad_force_vector + tension_vector) / mass - jnp.array([0.,0.,gravity])
+    
     print("acc taut",acc)
     acc_L  = acc_L.reshape(3,)
     acc  = acc.reshape(3,)
@@ -303,7 +307,7 @@ def check_distance(state, csi,csi_dot,is_slack):
     uav_attach_vector =  state[3:6] - state[0:3] 
     uav_attach_distance = jnp.linalg.norm(uav_attach_vector)
     if is_slack == False:
-        if uav_attach_distance > cable_length:# 0.001:
+        if uav_attach_distance > cable_length - 0.001:
             csi = uav_attach_vector/uav_attach_distance
             #state = state.at[0:3].set(state[3:6] - cable_length * csi)
             state = state.at[3:6].set(state[0:3] + cable_length * csi)
@@ -372,7 +376,7 @@ def quadrotor_dynamics(state: jnp.array, inputs: jnp.array) -> jnp.array:
     # to consider as inputs the f forces and moments in the body frame
 
    
-    if (d  > cable_length - 0.001): # & (d_dot > -0.001):
+    if (d  > cable_length - 0.001):# & (d_dot < 0.001):
         return func_taut(state,inputs,csi,csi_dot)
     else:  
          return func_slack(state,inputs,csi,csi_dot)
@@ -424,7 +428,7 @@ class Simulation(simulation.Simulator):
         #self.reference = jnp.zeros((T, x_init.size + input_hover.size),dtype=jnp.float32)
         #calculator = trapezoidal_traj.Trapeizoidal_Trajectory(q_init[0:3], q_des[0:3], 0.2, self.num_iter + self.controller.horizon + 1)
         #self.reference = calculator.compute_trajectory2()
-        
+        self.is_slack = is_slack
         
     
     def update(self):
@@ -440,15 +444,15 @@ class Simulation(simulation.Simulator):
         # WHICH SHAPE DOES IT HAVE?
         #x = jnp.arange(0, 500, 0.1) 
         #CASE 2- OSCILLLATION HORIZONTALLY
-        x = jnp.arange(0, 500, 0.1) 
-        x1 = jnp.arange(0, 100, 0.1) 
+        x = jnp.arange(0, 100, 0.1) 
+        x1 = jnp.arange(0, 20, 0.1) 
         
         
         # INPUT HOVERING
         #input_sequence =  jnp.array([(mass+mass_payload)*gravity/2 , (mass + mass_payload)*gravity/2 ])
 
         # INPUT SINUSOIDAL
-        #input_sequence =  jnp.array([0.5*(mass+mass_payload)*gravity + 10 * jnp.sin(0.05*x) , 0.5*(mass + mass_payload)*gravity + 10 * jnp.sin(0.05*x)])
+        #input_sequence =  jnp.array([0.5*(mass+mass_payload)*gravity + 10 * jnp.sin(0.5*x) , 0.5*(mass + mass_payload)*gravity + 10 * jnp.sin(0.5*x)])
         
         # INPUT ASCENDING WHILE TURNING IN ONE DIRECTION
         #input_sequence =  jnp.array([(mass+mass_payload)*gravity , 0.9* (mass + mass_payload)*gravity])
@@ -463,19 +467,36 @@ class Simulation(simulation.Simulator):
 
         
         # INPUT ASCENDING WHILE OSCILLATING HORIZONTALLY 2
-        input_sequence_1 =  jnp.array([(mass+mass_payload)*gravity/2 + 8 , (mass + mass_payload)*gravity/2 + 8 ])
-        input_sequence_1 = jnp.tile(input_sequence_1, (1000, 1)) 
+        #input_sequence_1 =  jnp.array([(mass+mass_payload)*gravity/2 + 8 , (mass + mass_payload)*gravity/2 + 8 ])
+        #input_sequence_1 = jnp.tile(input_sequence_1, (1000, 1)) 
         
         #input_sequence_1 =  jnp.array([((mass+mass_payload)*gravity + 1)/2 + (20 * jnp.sin(0.1*x1))/2 ,
         #                              ((mass+mass_payload)*gravity + 1)/2 - (20 * jnp.sin(0.1*x1))/2])
         #input_sequence_1 = input_sequence_1.reshape(1000,2)
         #input_sequence_2 =  jnp.array([((mass+mass_payload)*gravity + 1)/2 + (20 * jnp.sin(0.05*x))/2 ,
         #                              ((mass+mass_payload)*gravity + 1)/2 - (20 * jnp.sin(0.05*x))/2])
-        input_sequence_2 =  jnp.array([-(mass+mass_payload)*gravity/2 - 80 , -(mass + mass_payload)*gravity/2 - 80 ])
-        input_sequence_2 = jnp.tile(input_sequence_2, (4000, 1)) 
         #input_sequence_2 = input_sequence_2.reshape(2500,2)
-        input_sequence = jnp.concatenate([input_sequence_1,input_sequence_2],axis=0)
-
+        #input_sequence = jnp.concatenate([input_sequence_1,input_sequence_2],axis=0)
+        
+        # INPUT ASCENDING WHILE OSCILLATING HORIZONTALLY 3
+        
+        #input_sequence =  jnp.array([((mass+mass_payload)*gravity + 1)/2 + (5 * jnp.cos(0.5*x))/2 ,
+        #                              ((mass+mass_payload)*gravity + 1)/2 - (5 * jnp.cos(0.5*x))/2])
+        #input_sequence = input_sequence.reshape(1000,2)
+        
+        # INPUT CASE SWITCHING
+        #input_sequence_1 =  jnp.array([(mass+mass_payload)*gravity/2 + 8 , (mass + mass_payload)*gravity/2 + 8 ])
+        #input_sequence_1 = jnp.tile(input_sequence_1, (600, 1)) 
+        #input_sequence_2 =  jnp.array([-(mass+mass_payload)*gravity/2  , -(mass + mass_payload)*gravity/2  ])
+        #input_sequence_2 = jnp.tile(input_sequence_2, (400, 1)) 
+        
+        #input_sequence = jnp.concatenate([input_sequence_1,input_sequence_2],axis=0)
+        
+        # INPUT CASE SWITCHING 2
+        input_sequence =  jnp.array([-(mass+mass_payload)*gravity/2  , -(mass + mass_payload)*gravity/2  ])
+        input_sequence = jnp.tile(input_sequence, (1000, 1)) 
+        
+        #input_sequence = jnp.concatenate([input_sequence_1,input_sequence_2],axis=0)
 
         #input_sequence = (mass+mass_payload)*gravity + signal.chirp(x, f0=(mass+mass_payload)*gravity + 100, f1=650, t1=1000, method='hyperbolic')
 
@@ -520,16 +541,20 @@ class Simulation(simulation.Simulator):
         print("TERZO update",terzo)
         #v_kp1 , pos_payload = handle_collision(self.current_state, d,d_dot, csi,csi_dot)
         v_kp1  = handle_collision(self.current_state, d,d_dot, csi,csi_dot,self.is_slack)
+
+        print("VKP1 UDPATE",v_kp1)
+        print("IS_SLALCK UDPATE BEFORE",self.is_slack)
         self.current_state = self.current_state.at[nq:nq+7].set(v_kp1)
         #self.current_state = self.current_state.at[3:6].set(pos_payload)
         
 
         self.current_state   = self.model.integrate(self.current_state, ctrl, dt)
-        
+        print("current_VELOCITY UDPATE AFTER INTEGRATION",self.current_state[7:13])
         self.current_state, self.is_slack = check_distance(self.current_state, csi,csi_dot,self.is_slack)
+        print("current_VELOCITY UDPATE AFTER INTEGRATION",self.current_state[7:13])
         #print("cureent state1",self.current_state)
         # Check for collision and handle it
-        print("IS_SLALCK UDPATE",self.is_slack)
+        print("IS_SLALCK UDPATE AFTER",self.is_slack)
         
 
         # After integration bt = bt + dt or bt = 0 .
@@ -551,7 +576,7 @@ if __name__ == "__main__":
     if MODEL == "classic":
         # HERE WHAT VALUE OF nq,nv,nu SHOULD I USE?
         system = Model(quadrotor_dynamics, 7, 7, 2, [input_min, input_max])
-        q_init = jnp.array([0.0, 0.0, 5.0, 0.0, 0.0, 5.1, 0], dtype=jnp.float32)  # hovering position
+        q_init = jnp.array([0.0, 0.0, 5.0, 0.0, 0.0, 4.5, 0], dtype=jnp.float32)  # hovering position
         x_init = jnp.concatenate([q_init, jnp.array([0,0,0,0,0,0,0])])#(system.nv, dtype=jnp.float32)], axis=0)
         state_init = x_init
     elif MODEL == "mjx":
@@ -565,7 +590,7 @@ if __name__ == "__main__":
     solver = SbMPC(system, Objective(), mpc_config, gen_config)
 
     
-    T = 5000+25+1
+    T = 1000+25+1
    
     
 
@@ -590,7 +615,7 @@ if __name__ == "__main__":
     if jnp.linalg.norm(q_init[0:3] - q_init[3:6]) < cable_length:
         is_slack = True
 
-    sim = Simulation(state_init, system, is_slack, 5000)
+    sim = Simulation(state_init, system, is_slack, 1000)
     sim.simulate()
 
     
