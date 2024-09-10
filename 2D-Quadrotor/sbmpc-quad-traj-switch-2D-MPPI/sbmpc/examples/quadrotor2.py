@@ -29,10 +29,11 @@ import sbmpc.utils.trapezoidal_traj as trapezoidal_traj
 #config.update("jax_debug_nans", True)
 #jax.config.update("jax_debug_nans", True)
 
+# Deefine the quadrootor dynamic and the quadrotro variables
 
 MODEL = "classic"
 
-input_max = jnp.array([1000,1000])
+input_max = jnp.array([50,50])
 input_min = jnp.array([0,0])
 
 mass = 2.7
@@ -113,6 +114,9 @@ def func_slack(state,inputs,csi,csi_dot):
     acc = quad_force_vector/mass - jnp.array([0.,0.,gravity])
     acc_rot = (2*arm_length * (inputs[0] - inputs[1])) / inertia_slack 
     
+    """  
+    acc =  (1/mass)*jnp.array([0.,0.,inputs[0]]) - jnp.array([0.,0.,gravity])
+    """
     print("acc slack",acc)
     print("acc_L slack",acc_L)
     print("acc_rot slack",acc_rot)
@@ -159,7 +163,9 @@ def func_taut(state,inputs,csi,csi_dot):
     print("F taut",F)
     print("THETA taut",state[6])
     # Obtain Quadrotor Force Vector
-    
+    # ALREADY IN RADIANTS??
+    #quad_force_vector = F * rotation_matrix_around_x(normalize_angle(state[6])) @ e3  
+    #quad_force_vector = F * rotation_matrix_around_x((state[6] * jnp.pi)/180) @ e3  
     quad_force_vector = F * rotation_matrix_around_x(state[6]) @ e3  
 
     print("quad_force_vector taut",quad_force_vector)
@@ -171,10 +177,13 @@ def func_taut(state,inputs,csi,csi_dot):
     print("tension_vectortaut",tension_vector)
     # Solving for Load Acceleration
     
+    
+    #acc_L =  jnp.transpose(tension_vector).reshape(3,) / mass_payload - jnp.array([0.,0.,gravity])
     acc_L = -tension_vector / mass_payload - jnp.array([0.,0.,gravity])
     
     print("acc_L taut",acc_L)
     # Solving for Quadrotor Acceleration
+    #acc = (quad_force_vector - jnp.transpose(tension_vector).reshape(3,)) / mass - jnp.array([0.,0.,gravity])
     acc = (quad_force_vector + tension_vector) / mass - jnp.array([0.,0.,gravity])
     print("acc taut",acc)
     acc_L  = acc_L.reshape(3,)
@@ -182,7 +191,17 @@ def func_taut(state,inputs,csi,csi_dot):
     #acc_rot = (drone_length * (inputs[0] - inputs[1])) / (inertia_taut)
     acc_rot = (2*arm_length * (inputs[0] - inputs[1])) / (inertia_slack)
     print("acc_rot taut",acc_rot)
-    
+    """
+    acc_L = 1/(mass+mass_payload) * ((jnp.dot(csi, jnp.array([0.,0.,inputs[0]])) - mass*cable_length*jnp.dot(csi_dot, csi_dot)) * csi) - jnp.array([0,0,gravity])
+    #acc = spatial_inertia_mat_inv @ jnp.concatenate([total_force, total_torque])
+    print("acc_L taut",acc_L)
+    ################ Problem with cross product in 2 dimensions !!!!!!!!!!!!!!!!!!!!!!!!! ###############
+    csi_ddot = 1/(mass*cable_length) *  jnp.cross(csi,jnp.cross(csi,jnp.array([0.,0.,inputs[0]])))  -  jnp.dot(csi_dot,csi_dot) * csi
+
+    ## In this case the first term doesn't have to be trasposed in world frame since theh drone is always straight ###
+    #acc = acc_L -  cable_length * csi_ddot
+    acc = (jnp.array([0.,0.,inputs[0]]) - 1/(mass+mass_payload) * mass_payload *((jnp.dot(csi, jnp.array([0.,0.,inputs[0]])) - mass*cable_length*jnp.dot(csi_dot, csi_dot)) * csi))/mass - jnp.array([0,0,gravity])
+    """
     state_dot = jnp.concatenate([state[7:10],
                             #0.5 * quat_product(quat, ang_vel_quat),
                             state[10:13],
@@ -192,7 +211,8 @@ def func_taut(state,inputs,csi,csi_dot):
                             acc_L,
                             acc_rot.reshape(1,)])
         
-    
+    #v_kp1 = state[self.nq:] + self.bt * state_dot[-6:]#self.dynamics(state, inputs)[self.nq:]
+        
     return state_dot
 
 def handle_collision_taut(state,d,d_dot, csi,csi_dot):
@@ -206,16 +226,32 @@ def handle_collision_taut(state,d,d_dot, csi,csi_dot):
 
         print("v1 taut",v1)
         print("v2 taut",v2)
-                
+        """
+        v_kp1_parallel_drone = (1/(mass+mass_payload)) * ( mass* (csi @ jnp.transpose(csi)) * state[6:9] + mass_payload * (csi @ jnp.transpose(csi)) * state[9:12])
+        
+
+       
+        print("v_kp1_parallel_drone taut",v_kp1_parallel_drone)
+        v_kp1_parallel_payload =  v_kp1_parallel_drone
+
+        v_orthogoal_drone = state[6:9] - state[6:9]*(csi @ csi)
+        v_orthogoal_payload = state[9:12] - state[6:9]*(csi @ csi)
+        
+        v =   v_kp1_parallel_drone + v_orthogoal_drone #+ proj_of_v_on_v_orth 
+        v_payload =  v_kp1_parallel_payload + v_orthogoal_payload #+ proj_of_v_payload_on_v_payload_orth 
+        """           
             
         v_kp1 = state[nq:nq+7]
         v_kp1 =  v_kp1.at[0:3].set(v1) 
 
+        #v_kp1 = v_kp1 + v_kp1.at[3:6].set(v_payload)
         v_kp1 = v_kp1.at[3:6].set(v2) 
-        
+        #state   = state.at[3:6].set(state[0:3] + cable_length * csi)
         print("v_kp1 taut",v_kp1)
         
-    
+        
+
+        #return  v_kp1, state[3:6]
         return  v_kp1
 
 def handle_collision_slack( state,d,d_dot, csi,csi_dot):
@@ -243,7 +279,52 @@ def handle_collision(state,d,d_dot, csi,csi_dot,is_slack):
                          result_slack
                          )
 
+"""
+def func_reset_state_taut(state,csi,is_slack):
+    uav_attach_vector =  state[3:6] - state[0:3] 
+    uav_attach_distance = jnp.linalg.norm(uav_attach_vector)
+    
+    csi = uav_attach_vector/uav_attach_distance
+    state = state.at[0:3].set(state[3:6] + (cable_length-0.001) * csi)
 
+    condition = (uav_attach_distance > cable_length - 0.001)
+    
+    is_slack_result_reset_taut = func_reset_is_slack_taut(state,csi,is_slack)
+    is_slack_result_reset_slack = func_reset_is_slack_slack(state,csi,is_slack)
+    return_is_slack = jax.lax.select(condition,is_slack_result_reset_taut, is_slack_result_reset_slack)
+    state_and_is_slack = jnp.concatenate([state, return_is_slack.reshape(1,)],dtype=jnp.float32)
+    return state_and_is_slack
+
+def func_reset_state_slack(state,csi,is_slack):
+    uav_attach_vector =  state[3:6] - state[0:3] 
+    uav_attach_distance = jnp.linalg.norm(uav_attach_vector)
+    condition = (uav_attach_distance > cable_length - 0.001)
+
+    is_slack_result_reset_taut = func_reset_is_slack_taut(state,csi,is_slack)
+    is_slack_result_reset_slack = func_reset_is_slack_slack(state,csi,is_slack)
+    return_is_slack = jax.lax.select(condition,is_slack_result_reset_taut, is_slack_result_reset_slack)
+    state_and_is_slack = jnp.concatenate([state, return_is_slack.reshape(1,)],dtype=jnp.float32)
+    
+    return state_and_is_slack
+
+def func_reset_is_slack_taut(state,csi,is_slack):
+    return is_slack
+
+def func_reset_is_slack_slack(state,csi,is_slack):
+    return 1.0 - is_slack
+
+def check_distance(state, csi,csi_dot,is_slack):
+    
+    condition = (is_slack == 0.0)
+    state_result_reset_taut = func_reset_state_taut(state,csi,is_slack)
+    state_result_reset_slack = func_reset_state_slack(state,csi,is_slack)
+    
+    
+    #print("condition 1 ",condition)
+    ######## state_dot ########
+    return_state_and_is_slack =  jax.lax.select(condition,state_result_reset_taut, state_result_reset_slack) 
+    return return_state_and_is_slack[:-1], return_state_and_is_slack[-1]
+"""
 def check_distance(state, csi,csi_dot,is_slack):
     uav_attach_vector =  state[0:3] - state[3:6]  
     uav_attach_distance = jnp.linalg.norm(uav_attach_vector)
@@ -263,6 +344,18 @@ def check_distance(state, csi,csi_dot,is_slack):
             is_slack = 0.0
 
     return state, is_slack
+
+
+"""
+def handle_collision(state,d,d_dot, csi,csi_dot):
+    condition = jnp.logical_and(d  >=  cable_length - 0.001,d_dot >= -0.01)
+    if condition:
+        vel_taut = handle_collision_taut(state,d,d_dot, csi,csi_dot)
+        return vel_taut
+    else:
+        vel_slack = handle_collision_slack(state,d,d_dot, csi,csi_dot)
+        return vel_slack
+"""
 
 
 @jax.jit
@@ -285,11 +378,13 @@ def quadrotor_dynamics(state: jnp.array, inputs: jnp.array) -> jnp.array:
     state_dot :jnp.array
         time derivative of state with given inputs
     """
-    
+    #csi = (state[3:6] - state[0:3])/cable_length
 
     csi_dot = (state[7:10] - state[10:13] )/cable_length
     csi = (state[0:3] - state[3:6] )/jnp.linalg.norm(state[0:3] - state[3:6] )
-    
+    #csi_dot = (((state[10:13] - state[7:10])*jnp.linalg.norm(state[3:6] - state[0:3]))-((state[3:6] - state[0:3]) * (state[3:6] - state[0:3]) * (1/jnp.linalg.norm(state[3:6] - state[0:3])) * (state[10:13] - state[7:10])))/(jnp.linalg.norm(state[3:6] - state[0:3]))**2
+    #csi_dot = csi_dot/jnp.linalg.norm(csi_dot)
+    #csi_dot = (state[10:13] - state[7:10])/jnp.linalg.norm(state[10:13] - state[7:10])
     print("csi dynamics",csi)
     print("csi_dot dynamics",csi_dot)
     print("csi NORM dynamics",jnp.linalg.norm(csi))
@@ -299,7 +394,21 @@ def quadrotor_dynamics(state: jnp.array, inputs: jnp.array) -> jnp.array:
 
     d = jnp.linalg.norm(state[0:3]  - state[3:6])
     d_dot = ((state[3:6] - state[0:3]) @ (state[10:13] - state[7:10]))/((jnp.linalg.norm(state[3:6] - state[0:3]  )))
+    # Inputs are said to be total force and total torque but I already have this computation in order 
+    # to consider as inputs the f forces and moments in the body frame
     
+    
+    
+    
+    ######## state_dot ########
+    #return jnp.select([d - cable_length  < 0.001,  #### Cable Slack ####
+    #                     jnp.logical_and(d - cable_length >= 0.001 , d_dot >= -0.01)],
+    #                      #### Cable Taut ####
+    #                     [func_slack(state,inputs),
+    #                     func_taut(state,inputs,csi,csi_dot)]
+    #                     )
+    #condition = jnp.logical_and(d  > cable_length - 0.001, d_dot > -0.001)
+    #condition = (d  >  cable_length - 0.001) #&  (d_dot > 0.001)
     condition = (d  > cable_length - 0.001)
     result_taut = func_taut(state,inputs,csi,csi_dot)
     result_slack = func_slack(state,inputs,csi,csi_dot)
@@ -308,74 +417,245 @@ def quadrotor_dynamics(state: jnp.array, inputs: jnp.array) -> jnp.array:
     return jax.lax.select(condition,
                           result_taut,
                           result_slack
-                         
-                         )
+    )
+ 
+"""                        
 
-
-
+###### LINEAR TRAJECTORY POINT FOR PAYLOAD AS REFERENCE #####
+# Standard deviation = [0.2 , 0.2]
+# For the other examples is [0.1,0.1]
 class Objective(BaseObjective):
-    """ Cost function for the Quadrotor regulation task"""
+    #Cost function for the Quadrotor regulation task
         
     def compute_state_error(self, state: jnp.array, state_ref : jnp.array) -> jnp.array:
         print("state",state.shape)
         print("state_ref",state_ref.shape)
         pos_err = state[0:3] - state_ref[0:3]
+        pos_L__err = state[3:6] - state_ref[3:6]
         att_vel_err = state[13] - state_ref[13]
         vel_err = state[7:10] - state_ref[7:10]
         vel_L_err = state[10:13] - state_ref[10:13]
         ang_err = state[6] - state_ref[6]
 
-        return pos_err,  vel_err , ang_err , att_vel_err , vel_L_err
+        return pos_err, pos_L__err,  vel_err , ang_err , att_vel_err , vel_L_err
 
     def running_cost(self, state: jnp.array, inputs: jnp.array, reference) -> jnp.float32:
         state_ref = reference[:14]
         input_ref = reference[14:]
         
         #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, state_ref)
-        pos_err, vel_err , ang_err, att_vel_err, vel_L_err = self.compute_state_error(state, state_ref)    
-        return (80 * pos_err.transpose() @ pos_err +
+        pos_err, pos_L_err , vel_err , ang_err, att_vel_err, vel_L_err = self.compute_state_error(state, state_ref)       
+        return (#80 * pos_err.transpose() @ pos_err +
+                95 * pos_L_err.transpose() @ pos_L_err +
                 0.5 * att_vel_err *  att_vel_err +
-                20 * vel_L_err.transpose() @ vel_L_err +
-                35 * vel_err.transpose() @ vel_err +
+                95 * vel_L_err.transpose() @ vel_L_err +
+                #35 * vel_err.transpose() @ vel_err +
+                10 * ang_err * ang_err +
+                1*(inputs-input_ref).transpose() @ (inputs-input_ref))
+                #1*(inputs-input_hover).transpose() @ (inputs-input_hover))
+
+    def final_cost(self, state, reference):
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, reference[:13])
+        pos_err, pos_L_err,  vel_err , ang_err , att_vel_err , vel_L_err = self.compute_state_error(state, reference[:14])
+        return (#150 * pos_err.transpose() @ pos_err +
+                170 * pos_L_err.transpose() @ pos_L_err +
+                25 * ang_err * ang_err +
+                170 * vel_L_err.transpose() @ vel_L_err +
+                #55 * vel_err.transpose() @ vel_err +
+                1 * att_vel_err *  att_vel_err)
+"""    
+"""
+###### CONSTANT POINT FOR PAYLOAD AS REFERENCE #####
+class Objective(BaseObjective):
+    #Cost function for the Quadrotor regulation task
+        
+    def compute_state_error(self, state: jnp.array, state_ref : jnp.array) -> jnp.array:
+        print("state",state.shape)
+        print("state_ref",state_ref.shape)
+        pos_err = state[0:3] - state_ref[0:3]
+        pos_L__err = state[3:6] - state_ref[3:6]
+        att_vel_err = state[13] - state_ref[13]
+        vel_err = state[7:10] - state_ref[7:10]
+        vel_L_err = state[10:13] - state_ref[10:13]
+        ang_err = state[6] - state_ref[6]
+
+        return pos_err, pos_L__err,  vel_err , ang_err , att_vel_err , vel_L_err
+
+    def running_cost(self, state: jnp.array, inputs: jnp.array, reference) -> jnp.float32:
+        state_ref = reference[:14]
+        input_ref = reference[14:]
+        
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, state_ref)
+        pos_err, pos_L_err , vel_err , ang_err, att_vel_err, vel_L_err = self.compute_state_error(state, state_ref)       
+        return (#80 * pos_err.transpose() @ pos_err +
+                100 * pos_L_err.transpose() @ pos_L_err +
+                0.5 * att_vel_err *  att_vel_err +
+                35 * vel_L_err.transpose() @ vel_L_err +
+                #35 * vel_err.transpose() @ vel_err +
                 0.1 * ang_err * ang_err +
-                #0.01*(inputs-input_ref).transpose() @ (inputs-input_ref))
+                #1*(inputs-input_ref).transpose() @ (inputs-input_ref))
                 1*(inputs-input_hover).transpose() @ (inputs-input_hover))
 
-    def final_cost(self, state, state_ref):
+    def final_cost(self, state, reference):
         #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, reference[:13])
-        pos_err, vel_err , ang_err , att_vel_err, vel_L_err = self.compute_state_error(state, reference[:14])
-        return (150 * pos_err.transpose() @ pos_err +
+        pos_err, pos_L_err,  vel_err , ang_err , att_vel_err , vel_L_err = self.compute_state_error(state, reference[:14])
+        return (#150 * pos_err.transpose() @ pos_err +
+                200 * pos_L_err.transpose() @ pos_L_err +
                 5 * ang_err * ang_err +
-                40 * vel_L_err.transpose() @ vel_L_err +
-                55 * vel_err.transpose() @ vel_err +
+                75 * vel_L_err.transpose() @ vel_L_err +
+                #55 * vel_err.transpose() @ vel_err +
+                1 * att_vel_err *  att_vel_err)
+"""  
+"""
+###### HOVERING FOR PAYLOAD AS REFERENCE #####
+class Objective(BaseObjective):
+    #Cost function for the Quadrotor regulation task
+        
+    def compute_state_error(self, state: jnp.array, state_ref : jnp.array) -> jnp.array:
+        print("state",state.shape)
+        print("state_ref",state_ref.shape)
+        pos_err = state[0:3] - state_ref[0:3]
+        pos_L__err = state[3:6] - state_ref[3:6]
+        att_vel_err = state[13] - state_ref[13]
+        vel_err = state[7:10] - state_ref[7:10]
+        vel_L_err = state[10:13] - state_ref[10:13]
+        ang_err = state[6] - state_ref[6]
+
+        return pos_err, pos_L__err,  vel_err , ang_err , att_vel_err , vel_L_err
+
+    def running_cost(self, state: jnp.array, inputs: jnp.array, reference) -> jnp.float32:
+        state_ref = reference[:14]
+        input_ref = reference[14:]
+        
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, state_ref)
+        pos_err, pos_L_err , vel_err , ang_err, att_vel_err, vel_L_err = self.compute_state_error(state, state_ref)       
+        return (#80 * pos_err.transpose() @ pos_err +
+                80 * pos_L_err.transpose() @ pos_L_err +
+                0.5 * att_vel_err *  att_vel_err +
+                10 * vel_L_err.transpose() @ vel_L_err +
+                #35 * vel_err.transpose() @ vel_err +
+                0.1 * ang_err * ang_err +
+                #1*(inputs-input_ref).transpose() @ (inputs-input_ref))
+                1*(inputs-input_hover).transpose() @ (inputs-input_hover))
+
+    def final_cost(self, state, reference):
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, reference[:13])
+        pos_err, pos_L_err,  vel_err , ang_err , att_vel_err , vel_L_err = self.compute_state_error(state, reference[:14])
+        return (#150 * pos_err.transpose() @ pos_err +
+                150 * pos_L_err.transpose() @ pos_L_err +
+                5 * ang_err * ang_err +
+                25 * vel_L_err.transpose() @ vel_L_err +
+                #55 * vel_err.transpose() @ vel_err +
+                1 * att_vel_err *  att_vel_err)
+"""   
+
+# SQUARE TRAJECTORY
+class Objective(BaseObjective):
+    #Cost function for the Quadrotor regulation task
+        
+    def compute_state_error(self, state: jnp.array, state_ref : jnp.array) -> jnp.array:
+        print("state",state.shape)
+        print("state_ref",state_ref.shape)
+        pos_err = state[0:3] - state_ref[0:3]
+        pos_L__err = state[3:6] - state_ref[3:6]
+        att_vel_err = state[13] - state_ref[13]
+        vel_err = state[7:10] - state_ref[7:10]
+        vel_L_err = state[10:13] - state_ref[10:13]
+        ang_err = state[6] - state_ref[6]
+
+        return pos_err, pos_L__err,  vel_err , ang_err , att_vel_err , vel_L_err
+
+    def running_cost(self, state: jnp.array, inputs: jnp.array, reference) -> jnp.float32:
+        state_ref = reference[:14]
+        input_ref = reference[14:]
+        
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, state_ref)
+        pos_err, pos_L_err , vel_err , ang_err, att_vel_err, vel_L_err = self.compute_state_error(state, state_ref)       
+        return (100 * pos_err.transpose() @ pos_err +
+                #80 * pos_L_err.transpose() @ pos_L_err +
+                0.5 * att_vel_err *  att_vel_err +
+                15 * vel_L_err.transpose() @ vel_L_err +
+                15 * vel_err.transpose() @ vel_err +
+                0.1 * ang_err * ang_err +
+                1*(inputs-input_ref).transpose() @ (inputs-input_ref))
+                #1*(inputs-input_hover).transpose() @ (inputs-input_hover))
+
+    def final_cost(self, state, reference):
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, reference[:13])
+        pos_err, pos_L__err,  vel_err , ang_err , att_vel_err , vel_L_err = self.compute_state_error(state, reference[:14])
+        return (200 * pos_err.transpose() @ pos_err +
+                5 * ang_err * ang_err +
+                200 * vel_L_err.transpose() @ vel_L_err +
+                200 * vel_err.transpose() @ vel_err +
                 1 * att_vel_err *  att_vel_err)
 
 
+"""
+##### WEIGHTS FOR LINEAR TRAJECTORY #######
 
+class Objective(BaseObjective):
+    #Cost function for the Quadrotor regulation task
+        
+    def compute_state_error(self, state: jnp.array, state_ref : jnp.array) -> jnp.array:
+        print("state",state.shape)
+        print("state_ref",state_ref.shape)
+        pos_err = state[0:3] - state_ref[0:3]
+        pos_L__err = state[3:6] - state_ref[3:6]
+        att_vel_err = state[13] - state_ref[13]
+        vel_err = state[7:10] - state_ref[7:10]
+        vel_L_err = state[10:13] - state_ref[10:13]
+        ang_err = state[6] - state_ref[6]
+
+        return pos_err, pos_L__err,  vel_err , ang_err , att_vel_err , vel_L_err
+
+    def running_cost(self, state: jnp.array, inputs: jnp.array, reference) -> jnp.float32:
+        state_ref = reference[:14]
+        input_ref = reference[14:]
+        
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, state_ref)
+        pos_err, pos_L_err , vel_err , ang_err, att_vel_err, vel_L_err = self.compute_state_error(state, state_ref)       
+        return (80 * pos_err.transpose() @ pos_err +
+                0.5 * att_vel_err *  att_vel_err +
+                35 * vel_L_err.transpose() @ vel_L_err +
+                35 * vel_err.transpose() @ vel_err +
+                0.1 * ang_err * ang_err +
+                1*(inputs-input_ref).transpose() @ (inputs-input_ref))
+                #1*(inputs-input_hover).transpose() @ (inputs-input_hover))
+
+    def final_cost(self, state, reference):
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, reference[:13])
+        pos_err, pos_L_err,  vel_err , ang_err , att_vel_err , vel_L_err = self.compute_state_error(state, reference[:14])
+        return (150 * pos_err.transpose() @ pos_err +
+                #150 * pos_L_err.transpose() @ pos_L_err +
+                5 * ang_err * ang_err +
+                55 * vel_L_err.transpose() @ vel_L_err +
+                55 * vel_err.transpose() @ vel_err +
+                1 * att_vel_err *  att_vel_err)
+
+"""
 class Simulation(simulation.Simulator):
-    def __init__(self, initial_state, model, controller, is_slack, num_iterations):
-        super().__init__(initial_state, model,controller, is_slack, num_iterations)
+    def __init__(self, initial_state, model, controller, is_slack,reference, num_iterations):
+        super().__init__(initial_state, model,controller, is_slack,reference, num_iterations)
         
         ############# TRAJECTORY GENERATION ################
-        #q_des = jnp.array([0.0, 0.0, 9.0, 0.0, 0.0, 8.5,0.0], dtype=jnp.float32)  # hovering position
-        #self.reference = jnp.zeros((T, x_init.size + input_hover.size),dtype=jnp.float32)
-        #calculator = trapezoidal_traj.Trapeizoidal_Trajectory(q_init[0:3], q_des[0:3], 30, self.num_iter + self.controller.horizon + 1)
-        #self.reference = calculator.compute_chirp_trajectory()
+        q_des = jnp.array([0.0, 4.0, 9.0, 0.0, 4.0, 8.5,0.0], dtype=jnp.float32)  # hovering position
+        self.reference = jnp.zeros((T, x_init.size + input_hover.size),dtype=jnp.float32)
+        calculator = trapezoidal_traj.Trapeizoidal_Trajectory(q_init[3:6], q_des[3:6], 30, self.num_iter + self.controller.horizon + 1)
+        self.reference = calculator.compute_square_trajectory()
         
 
         ################# FIXED REFERENCE ##################
         #x_des = jnp.concatenate([q_des, jnp.zeros(self.model.nv, dtype=jnp.float32)], axis=0)
 
         #reference = jnp.concatenate((x_des, input_hover))
-        #jnp.concatenate([q_des, jnp.zeros(self.model.nv, dtype=jnp.float32)], axis=0) 
         #self.reference = reference
-        #jnp.concatenate([self.reference, jnp.array([(mass+mass_payload)*gravity/2, (mass+mass_payload)*gravity/2], dtype=jnp.float32)], axis=0) 
+        
         
         
     
     
     def update(self):
-        q_des = jnp.array([0.0, 0.0, 9.0, 0.0, 0.0, 8.5,0.0], dtype=jnp.float32)  # hovering position
+        q_des = jnp.array([0.0, 4.0, 9.0, 0.0, 4.0, 8.5,0.0], dtype=jnp.float32)  # hovering position
         x_des = jnp.concatenate([q_des, jnp.zeros(self.model.nv, dtype=jnp.float32)], axis=0)
         # Compute the optimal input sequence
         reference = jnp.concatenate((x_des, input_hover))
@@ -385,12 +665,12 @@ class Simulation(simulation.Simulator):
         time_start = time.time_ns()
         
         ##### FIXED REFERENCE #####
-        input_sequence = self.controller.compute_control_action(self.current_state_vec(), reference, num_steps=1).block_until_ready()
+        #input_sequence = self.controller.compute_control_action(self.current_state_vec(), reference, num_steps=1).block_until_ready()
         
         ##### TAJECTORY REFERENCE #####
 
-        #input_sequence = self.controller.compute_control_action(self.current_state_vec(), self.reference[self.iter:self.iter + self.controller.horizon ,:], num_steps=1).block_until_ready()
-
+        input_sequence = self.controller.compute_control_action(self.current_state_vec(), self.reference[self.iter:self.iter + self.controller.horizon ,:], num_steps=1).block_until_ready()
+        #print("REFERENCE",self.reference[self.iter:self.iter + self.controller.horizon ,:])
         print("computation time: {:.3f} [ms]".format(1e-6 * (time.time_ns() - time_start)))
         ctrl = input_sequence[:self.model.nu]
 
@@ -417,7 +697,6 @@ class Simulation(simulation.Simulator):
         
         # Simulate the dynamics
         
-
         v_kp1  = handle_collision(self.current_state, d,d_dot, csi,csi_dot,self.is_slack)
         self.current_state = self.current_state.at[nq:nq+7].set(v_kp1)
         #self.current_state = self.current_state.at[3:6].set(state_L)
@@ -443,7 +722,7 @@ if __name__ == "__main__":
 
     if MODEL == "classic":
         system = Model(quadrotor_dynamics, 7, 7, 2, [input_min, input_max])
-        q_init = jnp.array([0.0, 0.0, 5.0, 0.0, 0.0, 5.1, 0], dtype=jnp.float32)  # hovering position
+        q_init = jnp.array([0.0, 0.0, 5.0, 0.0, 0.0, 4.5, 0], dtype=jnp.float32)  # hovering position
         #q_init = jnp.array([0.0, 0.0, 9.0, 0.0, 0.0, 9.1, 0], dtype=jnp.float32)  # hovering position
         x_init = jnp.concatenate([q_init, jnp.array([0,0,0,0,0,0,0])])#(system.nv, dtype=jnp.float32)], axis=0)
         state_init = x_init
@@ -463,15 +742,17 @@ if __name__ == "__main__":
     
     #dim = x_init.size + input_hover.size = 17
     
-    #q_des = jnp.array([0.0, 0.0, 9.0, 0.0, 0.0, 8.5,0.0], dtype=jnp.float32)  # hovering position
+    q_des = jnp.array([0.0, 4.0, 9.0, 0.0, 4.0, 8.5,0.0], dtype=jnp.float32)  # hovering position
     #reference = jnp.concatenate([q_des, jnp.zeros(nq, dtype=jnp.float32)], axis=0) 
     #reference = jnp.concatenate([reference, jnp.array([(mass+mass_payload)*gravity/2, (mass+mass_payload)*gravity/2], dtype=jnp.float32)], axis=0)
-    reference = jnp.concatenate((x_init, input_hover))
-    #reference = jnp.zeros((T, x_init.size + input_hover.size),dtype=jnp.float32)
-    #calculator = trapezoidal_traj.Trapeizoidal_Trajectory(q_init[0:3], q_des[0:3], 10, T)
-    #reference = calculator.compute_linear_trajectory()
+    #reference = jnp.concatenate((x_init, input_hover))
+    reference = jnp.zeros((T, x_init.size + input_hover.size),dtype=jnp.float32)
+    calculator = trapezoidal_traj.Trapeizoidal_Trajectory(q_init[3:6], q_des[3:6], 30, T)
+    reference = calculator.compute_square_trajectory()
     
 
+    reference = jnp.concatenate((x_init, input_hover))
+    
     
     # dummy for jitting
     input_sequence = solver.compute_control_action(x_init, reference).block_until_ready()
@@ -480,7 +761,7 @@ if __name__ == "__main__":
     if jnp.linalg.norm(q_init[0:3] - q_init[3:6]) < cable_length:
         is_slack = 1.0
     # Setup and run the simulation
-    sim = Simulation(state_init, system, solver, is_slack, iterations)
+    sim = Simulation(state_init, system, solver, is_slack, reference, iterations)
     #sim = Simulation(state_init, system, 1000)
     sim.simulate()
 
@@ -489,6 +770,7 @@ if __name__ == "__main__":
     import seaborn as sns
     import pandas as pd
     import matplotlib.gridspec as gridspec
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
     title = ['x', 'y', 'z', 'x_L', 'y_L', 'z_L', 'theta', 'x_dot', 'y_dot', 'z_dot', 'x_Ldot', 'y_Ldot', 'z_Ldot', 'theta_dot', 'Cable_Length', 'u1','u2']
@@ -583,7 +865,7 @@ if __name__ == "__main__":
     gs.update(wspace=0.2, hspace=0.25)
 
     #xtr_subsplot= fig.add_subplot(gs[0:4,0:3])
-    xtr_subsplot= fig.add_subplot(gs[0:4,0:4])
+    xtr_subsplot= fig.add_subplot(gs[0:4,0:3])
 
     plt.plot( iterations_array,x, linestyle='-', label='drone_x_position', color=colors[0], mfc='w', markersize=4) # plot data
     plt.plot(iterations_array,x_L, linestyle='-', label='payload_x_position', color=colors2[0], mfc='w', markersize=4) # plot data
@@ -594,13 +876,13 @@ if __name__ == "__main__":
    
     #plot params
     plt.xlim([0,iterations + 50])
-    plt.ylim([0,15])
+    plt.ylim([-5,15])
     plt.minorticks_on()
     plt.tick_params(direction='in',right=True, top=True)
     plt.tick_params(labelsize=10)
     plt.tick_params(labelbottom=True, labeltop=False, labelright=False, labelleft=True)
     #xticks = np.arange(0, 1e4,10)
-    yticks = np.arange(0,15.1,1.5)
+    yticks = np.arange(0,15.1,1)
 
     plt.tick_params(direction='in',which='minor', length=5, bottom=True, top=True, left=True, right=True)
     plt.tick_params(direction='in',which='major', length=10, bottom=True, top=True, left=True, right=True)
@@ -608,11 +890,11 @@ if __name__ == "__main__":
     plt.yticks(yticks)
 
     plt.xlabel('Iteration', fontsize=14) 
-    plt.ylabel('Position',fontsize=14)  # label the y axis
+    plt.ylabel('Position [m]',fontsize=14)  # label the y axis
 
 
     plt.legend(fontsize=14)  # add the legend (will default to 'best' location)
-    """
+    
     #plot text and line on top of figure
     plt.axvline(x=10, linestyle='dotted', color='black')
     plt.text(20.5, 50, 'First Zoom', rotation=90)
@@ -623,16 +905,16 @@ if __name__ == "__main__":
 
     #generate second panel
     xtr_subsplot = fig.add_subplot(gs[0:2,3:4])
-    #plt.plot( iterations_array[0:50],x[0:50], linestyle='-', label='drone_x_position', color=colors[0], mfc='w', markersize=4) # plot data
-    #plt.plot(iterations_array[0:50],x_L[0:50], linestyle='-', label='payload_x_position', color=colors2[0], mfc='w', markersize=4) # plot data
-    #plt.plot(iterations_array[0:50],y[0:50], linestyle='-', label='drone_y_position', color=colors[8], mfc='w', markersize=4) # plot data
-    #plt.plot( iterations_array[0:50],y_L[0:50],linestyle='-',  label='payload_y_position', color=colors2[8], mfc='w', markersize=4) # plot data
-    plt.plot( iterations_array[0:100],z[0:100],linestyle='-',  label='drone_z_position', color=colors[8], mfc='w', markersize=4) # plot data
-    plt.plot( iterations_array[0:100],z_L[0:100], linestyle='-', label='payload_z_position', color=colors2[16], mfc='w', markersize=4) # plot data
+    plt.plot( iterations_array[0:100],x[0:100], linestyle='-', label='drone_x_position', color=colors[0], mfc='w', markersize=2) # plot data
+    plt.plot(iterations_array[0:100],x_L[0:100], linestyle='-', label='payload_x_position', color=colors2[0], mfc='w', markersize=2) # plot data
+    plt.plot(iterations_array[0:100],y[0:100], linestyle='-', label='drone_y_position', color=colors[8], mfc='w', markersize=2) # plot data
+    plt.plot( iterations_array[0:100],y_L[0:100],linestyle='-',  label='payload_y_position', color=colors2[8], mfc='w', markersize=2) # plot data
+    plt.plot( iterations_array[0:100],z[0:100],linestyle='-',  label='drone_z_position', color=colors[8], mfc='w', markersize=2) # plot data
+    plt.plot( iterations_array[0:100],z_L[0:100], linestyle='-', label='payload_z_position', color=colors2[16], mfc='w', markersize=2) # plot data
 
     #Define tick parameters
     xticks2 = np.arange(0,100,10)
-    yticks2 = np.arange(0,20.1,1)
+    yticks2 = np.arange(-5.1,15.1,1)
     plt.minorticks_on()
     plt.tick_params(direction='in',which='minor', length=5, 
                     bottom=True, top=True, left=True, right=True)
@@ -645,18 +927,19 @@ if __name__ == "__main__":
     plt.yticks(yticks2)
     plt.legend()
 
+    
     #generate third panel
     xtr_subsplot = fig.add_subplot(gs[2:4,3:4])
-    #plt.plot( iterations_array[590:650],x[590:650], linestyle='-', label='drone_x_position', color=colors[0], mfc='w', markersize=4) # plot data
-    #plt.plot(iterations_array[590:650],x_L[590:650], linestyle='-', label='payload_x_position', color=colors2[0], mfc='w', markersize=4) # plot data
-    #plt.plot(iterations_array[590:650],y[590:650], linestyle='-', label='drone_y_position', color=colors[8], mfc='w', markersize=4) # plot data
-    #plt.plot( iterations_array[590:650],y_L[590:650],linestyle='-',  label='payload_y_position', color=colors2[8], mfc='w', markersize=4) # plot data
-    plt.plot( iterations_array[590:650],z[590:650],linestyle='-',  label='drone_z_position', color=colors[8], mfc='w', markersize=4) # plot data
-    plt.plot( iterations_array[590:650],z_L[590:650], linestyle='-', label='payload_z_position', color=colors2[16], mfc='w', markersize=4) # plot data
+    plt.plot( iterations_array[590:650],x[590:650], linestyle='-', label='drone_x_position', color=colors[0], mfc='w', markersize=2) # plot data
+    plt.plot(iterations_array[590:650],x_L[590:650], linestyle='-', label='payload_x_position', color=colors2[0], mfc='w', markersize=2) # plot data
+    plt.plot(iterations_array[590:650],y[590:650], linestyle='-', label='drone_y_position', color=colors[8], mfc='w', markersize=2) # plot data
+    plt.plot( iterations_array[590:650],y_L[590:650],linestyle='-',  label='payload_y_position', color=colors2[8], mfc='w', markersize=2) # plot data
+    plt.plot( iterations_array[590:650],z[590:650],linestyle='-',  label='drone_z_position', color=colors[8], mfc='w', markersize=2) # plot data
+    plt.plot( iterations_array[590:650],z_L[590:650], linestyle='-', label='payload_z_position', color=colors2[16], mfc='w', markersize=2) # plot data
 
     #Define tick parameters
     xticks3 = np.arange(590,651,5)
-    yticks3 = np.arange(360,460.1,5)
+    yticks3 = np.arange(-5.1,15.1,1)
     plt.minorticks_on()
     plt.tick_params(direction='in',which='minor', length=5, 
                     bottom=True, top=True, left=True, right=True)
@@ -668,13 +951,12 @@ if __name__ == "__main__":
     plt.xticks(xticks3)
     plt.yticks(yticks3)
     plt.legend()
-    """
-    plt.show()
+    
 
     ########### VELOCITY PLOT ##########################################
 
     #Prepare multipanel plot 
-    fig2 = plt.figure(1, figsize=(5, 5))
+    fig2 = plt.figure(2, figsize=(5, 5))
     gs2 = gridspec.GridSpec(4,4)
     gs2.update(wspace=0.2, hspace=0.25)
 
@@ -744,12 +1026,11 @@ if __name__ == "__main__":
     plt.legend()
 
 
-    plt.show()
 
     ######################################### THETA PLOT #################################################################
 
     #Prepare multipanel plot 
-    fig3 = plt.figure(1, figsize=(5, 5))
+    fig3 = plt.figure(3, figsize=(5, 5))
     gs3 = gridspec.GridSpec(4,4)
     gs3.update(wspace=0.2, hspace=0.25)
 
@@ -764,7 +1045,7 @@ if __name__ == "__main__":
     #plt.ylim([-100,100])
     #xticks = np.arange(0, 1e4,10)
     xticks = np.arange(0,1000.5,100)
-    yticks = np.arange(-3.14,3.14,0.5)
+    yticks = np.arange(-6.28,6.28,0.4)
     plt.minorticks_on()
     plt.tick_params(direction='in',which='minor', length=5, 
                     bottom=True, top=True, left=True, right=True)
@@ -783,7 +1064,7 @@ if __name__ == "__main__":
     plt.yticks(yticks)
 
     plt.xlabel('Iteration', fontsize=14) 
-    plt.ylabel('Theta',fontsize=14)  # label the y axis
+    plt.ylabel('Theta [rad]',fontsize=14)  # label the y axis
 
 
     plt.legend()  # add the legend (will default to 'best' location)
@@ -794,7 +1075,7 @@ if __name__ == "__main__":
    
     #Define tick parameters
     xticks2 = np.arange(0,1000.5,100)
-    yticks2 = np.arange(-3.14,3.14,0.5)
+    yticks2 = np.arange(-10.1,10.1,1)
     plt.minorticks_on()
     plt.tick_params(direction='in',which='minor', length=5, 
                     bottom=True, top=True, left=True, right=True)
@@ -806,16 +1087,15 @@ if __name__ == "__main__":
     plt.xticks(xticks2)
     plt.yticks(yticks2)
     plt.xlabel('Iterations', fontsize=14) 
-    plt.ylabel('Theta Dot',fontsize=14)  # label the y axis
+    plt.ylabel('Theta Dot [rad/s]',fontsize=14)  # label the y axis
 
     plt.legend()
 
 
-    plt.show()
 ################################################  CABLE LENGTH PLOT ##########################################################
 
     #plot
-    fig = plt.figure(1, figsize=(5, 5))
+    plt.figure(4, figsize=(5, 5))
     plt.plot( iterations_array,Cable_Length, linestyle='-', label='Cable Length', color=colors2[16], mfc='w', markersize=4) # plot data
 
     #plt.plot(x_fit, ffit(x_fit), linestyle='-', marker='None', label='fit', color=colors[0], markerfacecolor='white', markersize=8) # plot data
@@ -835,18 +1115,17 @@ if __name__ == "__main__":
 
 
     plt.xlabel('Iterations', fontsize=14) 
-    plt.ylabel('Cable Length',fontsize=14)  # label the y axis
+    plt.ylabel('Cable Length [m]',fontsize=14)  # label the y axis
 
 
     plt.legend(fontsize=14)  # add the legend (will default to 'best' location)
-    plt.show()
 
     ############################################## INPUT PLOT ############################################################
 
     #plot
-    fig = plt.figure(1, figsize=(5, 5))
+    plt.figure(5, figsize=(5, 5))
     plt.plot( iterations_array,u1, linestyle='-', label='u1', color=colors2[16], mfc='w', markersize=4) # plot data
-    plt.plot( iterations_array,u1, linestyle='-', label='u2', color=colors[8], mfc='w', markersize=4) # plot data
+    plt.plot( iterations_array,u2, linestyle='-', label='u2', color=colors[8], mfc='w', markersize=4) # plot data
 
     #plt.plot(x_fit, ffit(x_fit), linestyle='-', marker='None', label='fit', color=colors[0], markerfacecolor='white', markersize=8) # plot data
 
@@ -869,13 +1148,12 @@ if __name__ == "__main__":
 
 
     plt.legend(fontsize=14)  # add the legend (will default to 'best' location)
-    plt.show()
 
     ############################################## TORQUE PLOT ############################################################
 
     #plot
-    fig = plt.figure(1, figsize=(5, 5))
-    plt.plot( iterations_array,2*arm_length*(u1 - u2)/inertia_slack, linestyle='-', label='torque', color=colors2[16], mfc='w', markersize=4) # plot data
+    plt.figure(6, figsize=(5, 5))
+    plt.plot( iterations_array, 2*arm_length*(u1 - u2), linestyle='-', label='torque', color=colors2[16], mfc='w', markersize=4) # plot data
 
     #plt.plot(x_fit, ffit(x_fit), linestyle='-', marker='None', label='fit', color=colors[0], markerfacecolor='white', markersize=8) # plot data
 
@@ -894,16 +1172,15 @@ if __name__ == "__main__":
 
 
     plt.xlabel('Iterations', fontsize=14) 
-    plt.ylabel('Inputs torque',fontsize=14)  # label the y axis
+    plt.ylabel('Inputs torque [N m]',fontsize=14)  # label the y axis
 
 
     plt.legend(fontsize=14)  # add the legend (will default to 'best' location)
-    plt.show()
 
     ############################################## INPUT FORCE ############################################################
 
     #plot
-    fig = plt.figure(1, figsize=(5, 5))
+    plt.figure(7, figsize=(5, 5))
     plt.plot( iterations_array, u1 + u2, linestyle='-', label='Force', color=colors2[16], mfc='w', markersize=4) # plot data
     
 
@@ -924,10 +1201,39 @@ if __name__ == "__main__":
 
 
     plt.xlabel('Iterations', fontsize=14) 
-    plt.ylabel('Inputs Force',fontsize=14)  # label the y axis
+    plt.ylabel('Inputs Force [N]',fontsize=14)  # label the y axis
 
 
     plt.legend(fontsize=14)  # add the legend (will default to 'best' location)
+
+
+########################################## 3D ###############################################################
+
+    ax = plt.figure().add_subplot(projection='3d')
+    # Plot x-y-z position of the robot
+    ax.plot(sim.state_traj[:, 0], sim.state_traj[:, 1], sim.state_traj[:, 2])
+    ax.plot(sim.state_traj[:, 3], sim.state_traj[:, 4], sim.state_traj[:, 5])
+    
+    # Vertices of the square
+    square_vertices = np.array([
+        [0, 0.0, 5.5],  # First corner
+        [0, 1.0, 6.5],   # Second corner
+        [0, 0.0, 7.5],    # Third corner
+        [0, -1.0, 6.5],
+        [0, 0.0, 5.5]    # Fourth corner
+    ])
+
+    # Extract the x, y, and z coordinates for plotting
+    x = square_vertices[:, 0]
+    y = square_vertices[:, 1]
+    z = square_vertices[:, 2]
+
+    # Plot the contour of the square by connecting vertices
+    ax.plot(x, y, z, color='cyan', linewidth=1)
+    
+    plt.legend(["drone_position", "payload_position"])
+    plt.grid()
+
     plt.show()
 
 
@@ -1014,11 +1320,11 @@ ani.save('/home/mpiras/MPPI/sbmpc-quad-traj-switch-2D-TEST/sbmpc/quadrotor.mp4',
 from mpl_toolkits.mplot3d import Axes3D
 import imageio
 
-#
+
 
 # Parameters for the output
-output_folder = './frames3/'
-output_video = 'drone_positions3.mp4'
+output_folder = './frames_Hovering/'
+output_video = 'drone_position_Hovering.mp4'
 
 zoom_padding = 2.0  # You can adjust this to be more or less zoomed in
 # Drone dimensions
