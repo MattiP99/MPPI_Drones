@@ -56,9 +56,13 @@ input_hover = 0.5 * jnp.array([(mass+mass_payload)*gravity, (mass+mass_payload)*
 nq = 7
 
 dt = 0.02
+##### GOAL PROBLEM ##############
+column_top = jnp.array([3,8])
+column_bottom = jnp.array([3,7.6])
+
 ### DEFINE SYSTEM STATE and INPUTS ####
-# X = [x, x_L, dotx, dotx_L ] = [12,1]
-#     [3   3 ,   3      3    ]
+# X = [x, x_L,theta, dotx, dotx_L ,thetadot] = [14,1]
+#     [3   3 ,  1 ,   3      3    ,   1]
 # x_L, dotx_L= payload position and its velocity
 # x, dotx = drone position and its velocity
 
@@ -331,8 +335,19 @@ def check_distance(state, csi,csi_dot,is_slack):
     if is_slack == 0.0:
         if uav_attach_distance > cable_length - 0.001:
             csi = uav_attach_vector/uav_attach_distance
-            state = state.at[0:3].set(state[3:6] + (cable_length - 0.001) * csi)
-            #state = state.at[3:6].set(state[0:3] + cable_length * csi)
+            d_initial = uav_attach_distance
+    
+            # Desired final distance
+            d_final = cable_length - 0.001
+            delta_d = jnp.abs(d_initial - d_final)
+            
+            delta_p1 = (mass_payload / (mass + mass_payload)) * delta_d * csi
+            delta_p2 = (mass / (mass + mass_payload)) * delta_d * csi
+            #state = state.at[0:3].set(state[3:6] + (cable_length - 0.001) * csi)
+            #state = state.at[3:6].set(state[0:3] + (cable_length - 0.001) * csi)
+            state = state.at[0:3].set(state[0:3] - delta_p1)
+            state = state.at[3:6].set(state[3:6] + delta_p2)
+            is_slack = 0.0
             
         else:
             is_slack = 1.0
@@ -341,6 +356,19 @@ def check_distance(state, csi,csi_dot,is_slack):
         if uav_attach_distance <= cable_length - 0.001:
             is_slack = 1.0
         else:
+            csi = uav_attach_vector/uav_attach_distance
+            d_initial = uav_attach_distance
+    
+            # Desired final distance
+            d_final = cable_length - 0.001
+            delta_d = jnp.abs(d_initial - d_final)
+            
+            delta_p1 = (mass_payload / (mass + mass_payload)) * delta_d * csi
+            delta_p2 = (mass / (mass + mass_payload)) * delta_d * csi
+            #state = state.at[0:3].set(state[3:6] + (cable_length - 0.001) * csi)
+            #state = state.at[3:6].set(state[0:3] + (cable_length - 0.001) * csi)
+            state = state.at[0:3].set(state[0:3] - delta_p1)
+            state = state.at[3:6].set(state[3:6] + delta_p2)
             is_slack = 0.0
 
     return state, is_slack
@@ -418,10 +446,222 @@ def quadrotor_dynamics(state: jnp.array, inputs: jnp.array) -> jnp.array:
                           result_taut,
                           result_slack
     )
- 
-"""                        
 
-###### LINEAR TRAJECTORY POINT FOR PAYLOAD AS REFERENCE #####
+###### GOAL PROBLEM #####
+
+class Objective(BaseObjective):
+    #Cost function for the Quadrotor regulation task
+    def cpd_compute(self, state: jnp.array):
+        return (state[2] - column_top[1]) 
+    
+    def cpp_compute(self, state: jnp.array):
+        return (state[5] - column_bottom[1]) 
+    
+    def cable_err_compute(self, state: jnp.array):
+        result =  jnp.linalg.norm(state[0:3] - state[3:6]) - (cable_length - 0.001)
+        return result
+    
+    def comulumn_gap_penalty_compute(self, state: jnp.array,z_distance):
+        return z_distance - (column_top[1] - column_bottom[1])
+    
+    def gap_penalty_compute(self, state: jnp.array):
+        z_distance = jnp.absolute(state[5] - state[2])
+        condition_gp = (z_distance > column_top[1] - column_bottom[1])
+        result_gp = self.comulumn_gap_penalty_compute(state,z_distance)
+        comulumn_gap_penalty = jax.lax.select(condition_gp,
+                            result_gp,
+                            0.0
+                            )
+
+        return comulumn_gap_penalty
+    
+    def cpd_cpp_compute(self, state: jnp.array):
+        condition_cpd =  (state[2] > column_top[1])
+        condition_cpp = (state[5] < column_bottom[1])
+
+        result_cpd = self.cpd_compute(state)
+        result_cpp = self.cpp_compute(state)
+        cpd_err =  jax.lax.select(condition_cpd,
+                            result_cpd,
+                            0.0
+                            )    
+        cpp_err =  jax.lax.select(condition_cpp,
+                            result_cpp,
+                            0.0
+                            ) 
+        return jnp.array([cpd_err,cpp_err])
+        
+        
+    def compute_state_error(self, state: jnp.array, state_ref : jnp.array) -> jnp.array:
+        print("state",state.shape)
+        print("state_ref",state_ref.shape)
+        pos_err = state[0:3] - state_ref[0:3]
+        pos_L_err = state[3:6] - state_ref[3:6]
+        att_vel_err = state[13] - state_ref[13]
+        vel_err = state[7:10] - state_ref[7:10]
+        vel_L_err = state[10:13] - state_ref[10:13]
+        ang_err = state[6] - state_ref[6]
+
+        condition_cable_err =  (jnp.linalg.norm(state[0:3] - state[3:6]) >= cable_length - 0.001)
+            
+
+        #condition = (d  > cable_length - 0.001)
+        result_cable_err = self.cable_err_compute(state)
+        cable_err =  jax.lax.select(condition_cable_err,
+                            result_cable_err,
+                            0.0
+                            )    
+            
+        
+        condition_cpd_cpp = (jnp.logical_and(jnp.absolute(state[1] - column_top[0]) < 0.2, jnp.absolute(state[4] - column_top[0]) < 0.2))
+        result_cpd_cpp = self.cpd_cpp_compute(state)
+        cpd_cpp_err = jax.lax.select(condition_cpd_cpp,
+                                     result_cpd_cpp,
+                                     jnp.array([0,0],dtype=jnp.float32)
+                                    ) 
+                
+        comulumn_penalty_drone = cpd_cpp_err[0]
+        comulumn_penalty_payload = cpd_cpp_err[1]
+
+
+        condition_comulumn_gap_penalty = (jnp.logical_and(jnp.absolute(state[1] - column_top[0]) < 0.2,jnp.absolute(state[4] - column_top[0]) < 0.2))
+        result_cgp = self.gap_penalty_compute(state)
+        comulumn_gap_penalty = jax.lax.select(condition_comulumn_gap_penalty,
+                            result_cgp,
+                            0.0
+                            ) 
+            
+            
+                
+
+        return pos_err, pos_L_err,  vel_err , vel_L_err , ang_err , att_vel_err , cable_err, comulumn_penalty_drone, comulumn_penalty_payload, comulumn_gap_penalty
+    
+    def running_cost(self, state: jnp.array, inputs: jnp.array, reference) -> jnp.float32:
+        state_ref = reference[:14]
+        input_ref = reference[14:]
+        
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, state_ref)
+        pos_err, pos_L_err,  vel_err , vel_L_err , ang_err , att_vel_err , cable_err, comulumn_penalty_drone, comulumn_penalty_payload, comulumn_gap_penalty = self.compute_state_error(state, state_ref)       
+        return (70 * pos_err.transpose() @ pos_err +
+                50 * pos_L_err.transpose() @ pos_L_err +
+                0.1 * att_vel_err *  att_vel_err +
+                20 * vel_err.transpose() @ vel_err +
+                15 * vel_L_err.transpose() @ vel_L_err +
+                
+                50 * ang_err * ang_err +
+                #1*(inputs-input_ref).transpose() @ (inputs-input_ref)+
+                1000 * cable_err * cable_err +
+                1000 * comulumn_penalty_drone * comulumn_penalty_drone +
+                1000 * comulumn_penalty_payload * comulumn_penalty_payload +
+                1000 * comulumn_gap_penalty * comulumn_gap_penalty +
+                2*(inputs-input_hover).transpose() @ (inputs-input_hover))
+
+    def final_cost(self, state, reference):
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, reference[:13])
+        pos_err, pos_L_err,  vel_err , vel_L_err , ang_err , att_vel_err , cable_err, comulumn_penalty_drone, comulumn_penalty_payload, comulumn_gap_penalty = self.compute_state_error(state, reference[:14])
+        return (100 * pos_err.transpose() @ pos_err +
+                80 * pos_L_err.transpose() @ pos_L_err +
+                100 * ang_err * ang_err +
+                80 * vel_err.transpose() @ vel_err +
+                50 * vel_L_err.transpose() @ vel_L_err +
+                0.1 * att_vel_err *  att_vel_err+ 
+                1000 * cable_err * cable_err +
+                1000 * comulumn_penalty_drone * comulumn_penalty_drone +
+                1000 * comulumn_penalty_payload * comulumn_penalty_payload +
+                1000 * comulumn_gap_penalty * comulumn_gap_penalty)
+    
+"""
+###### SINUSOIDAL TRAJECTORY z and LINEAR on y FOR PAYLOAD AND DRONE AS REFERENCE #####
+# Standard deviation = [0.2 , 0.2]
+# For the other examples is [0.1,0.1]
+class Objective(BaseObjective):
+    #Cost function for the Quadrotor regulation task
+        
+    def compute_state_error(self, state: jnp.array, state_ref : jnp.array) -> jnp.array:
+        print("state",state.shape)
+        print("state_ref",state_ref.shape)
+        pos_err = state[0:3] - state_ref[0:3]
+        pos_L_err = state[3:6] - state_ref[3:6]
+        att_vel_err = state[13] - state_ref[13]
+        vel_err = state[7:10] - state_ref[7:10]
+        vel_L_err = state[10:13] - state_ref[10:13]
+        ang_err = state[6] - state_ref[6]
+
+        return pos_err, pos_L_err,  vel_err , ang_err , att_vel_err , vel_L_err
+
+    def running_cost(self, state: jnp.array, inputs: jnp.array, reference) -> jnp.float32:
+        state_ref = reference[:14]
+        input_ref = reference[14:]
+        
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, state_ref)
+        pos_err, pos_L_err , vel_err , ang_err, att_vel_err, vel_L_err = self.compute_state_error(state, state_ref)       
+        return (70 * pos_err.transpose() @ pos_err +
+                90 * pos_L_err.transpose() @ pos_L_err +
+                0.1 * att_vel_err *  att_vel_err +
+                20 * vel_err.transpose() @ vel_err +
+                35 * vel_L_err.transpose() @ vel_L_err +
+                
+                0.5 * ang_err * ang_err +
+                1*(inputs-input_ref).transpose() @ (inputs-input_ref))
+                #1*(inputs-input_hover).transpose() @ (inputs-input_hover))
+
+    def final_cost(self, state, reference):
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, reference[:13])
+        pos_err, pos_L_err,  vel_err , ang_err , att_vel_err , vel_L_err = self.compute_state_error(state, reference[:14])
+        return (100 * pos_err.transpose() @ pos_err +
+                150 * pos_L_err.transpose() @ pos_L_err +
+                0.5 * ang_err * ang_err +
+                100 * vel_err.transpose() @ vel_err +
+                150 * vel_L_err.transpose() @ vel_L_err +
+                0.1 * att_vel_err *  att_vel_err)
+"""
+"""
+###### SINUSOIDAL TRAJECTORY FOR PAYLOAD AND DRONE AS REFERENCE #####
+# Standard deviation = [0.2 , 0.2]
+# For the other examples is [0.1,0.1]
+class Objective(BaseObjective):
+    #Cost function for the Quadrotor regulation task
+        
+    def compute_state_error(self, state: jnp.array, state_ref : jnp.array) -> jnp.array:
+        print("state",state.shape)
+        print("state_ref",state_ref.shape)
+        pos_err = state[0:3] - state_ref[0:3]
+        pos_L__err = state[3:6] - state_ref[3:6]
+        att_vel_err = state[13] - state_ref[13]
+        vel_err = state[7:10] - state_ref[7:10]
+        vel_L_err = state[10:13] - state_ref[10:13]
+        ang_err = state[6] - state_ref[6]
+
+        return pos_err, pos_L__err,  vel_err , ang_err , att_vel_err , vel_L_err
+
+    def running_cost(self, state: jnp.array, inputs: jnp.array, reference) -> jnp.float32:
+        state_ref = reference[:14]
+        input_ref = reference[14:]
+        
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, state_ref)
+        pos_err, pos_L_err , vel_err , ang_err, att_vel_err, vel_L_err = self.compute_state_error(state, state_ref)       
+        return (30 * pos_err.transpose() @ pos_err +
+                85 * pos_L_err.transpose() @ pos_L_err +
+                0.1 * att_vel_err *  att_vel_err +
+                35 * vel_err.transpose() @ vel_err +
+                55 * vel_L_err.transpose() @ vel_L_err +
+                
+                0.5 * ang_err * ang_err +
+                1*(inputs-input_ref).transpose() @ (inputs-input_ref))
+                #1*(inputs-input_hover).transpose() @ (inputs-input_hover))
+
+    def final_cost(self, state, reference):
+        #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, reference[:13])
+        pos_err, pos_L_err,  vel_err , ang_err , att_vel_err , vel_L_err = self.compute_state_error(state, reference[:14])
+        return (80 * pos_err.transpose() @ pos_err +
+                150 * pos_L_err.transpose() @ pos_L_err +
+                0.5 * ang_err * ang_err +
+                65 * vel_err.transpose() @ vel_err +
+                100 * vel_L_err.transpose() @ vel_L_err +
+                0.1 * att_vel_err *  att_vel_err)
+"""                
+"""
+###### SQUARE TRAJECTORY POINT FOR PAYLOAD AS REFERENCE #####
 # Standard deviation = [0.2 , 0.2]
 # For the other examples is [0.1,0.1]
 class Objective(BaseObjective):
@@ -446,11 +686,11 @@ class Objective(BaseObjective):
         #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, state_ref)
         pos_err, pos_L_err , vel_err , ang_err, att_vel_err, vel_L_err = self.compute_state_error(state, state_ref)       
         return (#80 * pos_err.transpose() @ pos_err +
-                95 * pos_L_err.transpose() @ pos_L_err +
-                0.5 * att_vel_err *  att_vel_err +
-                95 * vel_L_err.transpose() @ vel_L_err +
+                85 * pos_L_err.transpose() @ pos_L_err +
+                0.1 * att_vel_err *  att_vel_err +
+                55 * vel_L_err.transpose() @ vel_L_err +
                 #35 * vel_err.transpose() @ vel_err +
-                10 * ang_err * ang_err +
+                0.5 * ang_err * ang_err +
                 1*(inputs-input_ref).transpose() @ (inputs-input_ref))
                 #1*(inputs-input_hover).transpose() @ (inputs-input_hover))
 
@@ -458,12 +698,13 @@ class Objective(BaseObjective):
         #pos_err, att_err, vel_err, ang_vel_err = self.compute_state_error(state, reference[:13])
         pos_err, pos_L_err,  vel_err , ang_err , att_vel_err , vel_L_err = self.compute_state_error(state, reference[:14])
         return (#150 * pos_err.transpose() @ pos_err +
-                170 * pos_L_err.transpose() @ pos_L_err +
-                25 * ang_err * ang_err +
-                170 * vel_L_err.transpose() @ vel_L_err +
+                150 * pos_L_err.transpose() @ pos_L_err +
+                0.5 * ang_err * ang_err +
+                100 * vel_L_err.transpose() @ vel_L_err +
                 #55 * vel_err.transpose() @ vel_err +
-                1 * att_vel_err *  att_vel_err)
-"""    
+                0.1 * att_vel_err *  att_vel_err)
+
+"""
 """
 ###### CONSTANT POINT FOR PAYLOAD AS REFERENCE #####
 class Objective(BaseObjective):
@@ -549,6 +790,7 @@ class Objective(BaseObjective):
                 1 * att_vel_err *  att_vel_err)
 """   
 
+"""
 # SQUARE TRAJECTORY
 class Objective(BaseObjective):
     #Cost function for the Quadrotor regulation task
@@ -589,7 +831,7 @@ class Objective(BaseObjective):
                 200 * vel_err.transpose() @ vel_err +
                 1 * att_vel_err *  att_vel_err)
 
-
+"""
 """
 ##### WEIGHTS FOR LINEAR TRAJECTORY #######
 
@@ -638,24 +880,24 @@ class Simulation(simulation.Simulator):
         super().__init__(initial_state, model,controller, is_slack,reference, num_iterations)
         
         ############# TRAJECTORY GENERATION ################
-        q_des = jnp.array([0.0, 4.0, 9.0, 0.0, 4.0, 8.5,0.0], dtype=jnp.float32)  # hovering position
-        self.reference = jnp.zeros((T, x_init.size + input_hover.size),dtype=jnp.float32)
-        calculator = trapezoidal_traj.Trapeizoidal_Trajectory(q_init[3:6], q_des[3:6], 30, self.num_iter + self.controller.horizon + 1)
-        self.reference = calculator.compute_square_trajectory()
+        q_des = jnp.array([0.0, 4.0, 7.0, 0.0, 4.0, 6.5,0.0], dtype=jnp.float32)  # hovering position
+        #self.reference = jnp.zeros((T, x_init.size + input_hover.size),dtype=jnp.float32)
+        #calculator = trapezoidal_traj.Trapeizoidal_Trajectory(q_init[3:6], q_des[3:6], 20, self.num_iter + self.controller.horizon + 1)
+        #self.reference = calculator.compute_sinusoidal_trajectory_up_lateral3()
         
 
         ################# FIXED REFERENCE ##################
-        #x_des = jnp.concatenate([q_des, jnp.zeros(self.model.nv, dtype=jnp.float32)], axis=0)
+        x_des = jnp.concatenate([q_des, jnp.zeros(self.model.nv, dtype=jnp.float32)], axis=0)
 
-        #reference = jnp.concatenate((x_des, input_hover))
-        #self.reference = reference
+        reference = jnp.concatenate((x_des, input_hover))
+        self.reference = reference
         
         
         
     
     
     def update(self):
-        q_des = jnp.array([0.0, 4.0, 9.0, 0.0, 4.0, 8.5,0.0], dtype=jnp.float32)  # hovering position
+        q_des = jnp.array([0.0, 4.0, 7.0, 0.0, 4.0, 6.5,0.0], dtype=jnp.float32)
         x_des = jnp.concatenate([q_des, jnp.zeros(self.model.nv, dtype=jnp.float32)], axis=0)
         # Compute the optimal input sequence
         reference = jnp.concatenate((x_des, input_hover))
@@ -665,11 +907,11 @@ class Simulation(simulation.Simulator):
         time_start = time.time_ns()
         
         ##### FIXED REFERENCE #####
-        #input_sequence = self.controller.compute_control_action(self.current_state_vec(), reference, num_steps=1).block_until_ready()
+        input_sequence = self.controller.compute_control_action(self.current_state_vec(), reference, num_steps=1).block_until_ready()
         
         ##### TAJECTORY REFERENCE #####
 
-        input_sequence = self.controller.compute_control_action(self.current_state_vec(), self.reference[self.iter:self.iter + self.controller.horizon ,:], num_steps=1).block_until_ready()
+        #input_sequence = self.controller.compute_control_action(self.current_state_vec(), self.reference[self.iter:self.iter + self.controller.horizon ,:], num_steps=1).block_until_ready()
         #print("REFERENCE",self.reference[self.iter:self.iter + self.controller.horizon ,:])
         print("computation time: {:.3f} [ms]".format(1e-6 * (time.time_ns() - time_start)))
         ctrl = input_sequence[:self.model.nu]
@@ -714,15 +956,15 @@ class Simulation(simulation.Simulator):
 if __name__ == "__main__":
 
     mpc_config = ConfigMPC(0.02,
-                           25,
-                           jnp.array([0.1,0.1]),
+                           50,
+                           jnp.array([2,2]),
                            num_parallel_computations=10000,
                            initial_guess=input_hover)
     gen_config = ConfigGeneral("float32", jax.devices("gpu")[0])
 
     if MODEL == "classic":
         system = Model(quadrotor_dynamics, 7, 7, 2, [input_min, input_max])
-        q_init = jnp.array([0.0, 0.0, 5.0, 0.0, 0.0, 4.5, 0], dtype=jnp.float32)  # hovering position
+        q_init = jnp.array([0.0, 0.0, 5.0, 0.0, 0.0, 5.1, 0], dtype=jnp.float32)  # hovering position
         #q_init = jnp.array([0.0, 0.0, 9.0, 0.0, 0.0, 9.1, 0], dtype=jnp.float32)  # hovering position
         x_init = jnp.concatenate([q_init, jnp.array([0,0,0,0,0,0,0])])#(system.nv, dtype=jnp.float32)], axis=0)
         state_init = x_init
@@ -738,19 +980,20 @@ if __name__ == "__main__":
     solver = SbMPC(system, Objective(), mpc_config, gen_config)#, helper)
 
     iterations = 1000
-    T = iterations+25+1
+    T = iterations+50+1
     
     #dim = x_init.size + input_hover.size = 17
     
-    q_des = jnp.array([0.0, 4.0, 9.0, 0.0, 4.0, 8.5,0.0], dtype=jnp.float32)  # hovering position
+    
+    q_des = jnp.array([0.0, 4.0, 7.0, 0.0, 4.0, 6.5,0.0], dtype=jnp.float32)  # hovering position
     #reference = jnp.concatenate([q_des, jnp.zeros(nq, dtype=jnp.float32)], axis=0) 
     #reference = jnp.concatenate([reference, jnp.array([(mass+mass_payload)*gravity/2, (mass+mass_payload)*gravity/2], dtype=jnp.float32)], axis=0)
     #reference = jnp.concatenate((x_init, input_hover))
-    reference = jnp.zeros((T, x_init.size + input_hover.size),dtype=jnp.float32)
-    calculator = trapezoidal_traj.Trapeizoidal_Trajectory(q_init[3:6], q_des[3:6], 30, T)
-    reference = calculator.compute_square_trajectory()
+    #reference = jnp.zeros((T, x_init.size + input_hover.size),dtype=jnp.float32)
+    #calculator = trapezoidal_traj.Trapeizoidal_Trajectory(q_init[3:6], q_des[3:6], 20, T)
+    #reference = calculator.compute_sinusoidal_trajectory_up_lateral3()
     
-
+    #print("REFERENCE",reference[130:150,10:13])
     reference = jnp.concatenate((x_init, input_hover))
     
     
@@ -1213,13 +1456,13 @@ if __name__ == "__main__":
     # Plot x-y-z position of the robot
     ax.plot(sim.state_traj[:, 0], sim.state_traj[:, 1], sim.state_traj[:, 2])
     ax.plot(sim.state_traj[:, 3], sim.state_traj[:, 4], sim.state_traj[:, 5])
-    
+    """
     # Vertices of the square
     square_vertices = np.array([
         [0, 0.0, 5.5],  # First corner
-        [0, 1.0, 6.5],   # Second corner
-        [0, 0.0, 7.5],    # Third corner
-        [0, -1.0, 6.5],
+        [0, 1.0, 7.5],   # Second corner
+        [0, 0.0, 9.5],    # Third corner
+        [0, -1.0, 7.5],
         [0, 0.0, 5.5]    # Fourth corner
     ])
 
@@ -1230,7 +1473,7 @@ if __name__ == "__main__":
 
     # Plot the contour of the square by connecting vertices
     ax.plot(x, y, z, color='cyan', linewidth=1)
-    
+    """
     plt.legend(["drone_position", "payload_position"])
     plt.grid()
 
@@ -1319,12 +1562,13 @@ ani.save('/home/mpiras/MPPI/sbmpc-quad-traj-switch-2D-TEST/sbmpc/quadrotor.mp4',
 
 from mpl_toolkits.mplot3d import Axes3D
 import imageio
+import matplotlib.patches as patches
 
 
 
 # Parameters for the output
-output_folder = './frames_Hovering/'
-output_video = 'drone_position_Hovering.mp4'
+output_folder = './PROVA/'
+output_video = 'drone_PROVA.mp4'
 
 zoom_padding = 2.0  # You can adjust this to be more or less zoomed in
 # Drone dimensions
@@ -1336,6 +1580,11 @@ for i, (drone_pos, payload_pos, angle) in enumerate(zip(sim.state_traj[:, 0:3], 
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     
+    # Change the camera view angle
+    elev = 1  # Elevation angle
+    azim = 0#i * (360 / 200)  # Rotate 360 degrees over all frames
+    ax.view_init(elev=elev, azim=azim)
+
     # Plot all previous points in blue
     #ax.scatter(sim.state_traj[:i+1, 0], sim.state_traj[:i+1, 1], sim.state_traj[:i+1, 2], color='blue')
     
@@ -1352,7 +1601,7 @@ for i, (drone_pos, payload_pos, angle) in enumerate(zip(sim.state_traj[:, 0:3], 
         [drone_pos[2], payload_pos[2]], 
         color='black', linewidth=0.5, label='Cable'
     )
-    
+    """
     # Calculate dynamic limits based on the current positions with padding
     x_min = drone_pos[0] - arm_length - zoom_padding
     x_max = drone_pos[0] + arm_length + zoom_padding
@@ -1360,11 +1609,12 @@ for i, (drone_pos, payload_pos, angle) in enumerate(zip(sim.state_traj[:, 0:3], 
     y_max = max(drone_pos[1], payload_pos[1]) + arm_length + zoom_padding
     z_min = min(drone_pos[2], payload_pos[2]) - arm_length - zoom_padding
     z_max = max(drone_pos[2], payload_pos[2]) + arm_length + zoom_padding
+    """
 
     # Apply the dynamic limits
-    ax.set_xlim(x_min, x_max)
-    ax.set_ylim(y_min, y_max)
-    ax.set_zlim(z_min, z_max)
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-1, 6)
+    ax.set_zlim(0, 12)
     
     # Define rotor positions (assuming arms are along the y-axis before rotation)
     rotor1_rel_pos = np.array([0, arm_length, 0])
@@ -1391,7 +1641,30 @@ for i, (drone_pos, payload_pos, angle) in enumerate(zip(sim.state_traj[:, 0:3], 
     # Draw the propellers
     ax.scatter(rotor1_pos[0], rotor1_pos[1], rotor1_pos[2], color='green', s=1, marker='o', label='Propeller 1')
     ax.scatter(rotor2_pos[0], rotor2_pos[1], rotor2_pos[2], color='green', s=1, marker='o', label='Propeller 2')
+    
 
+    #Draw the two columns
+    # Ceiling z-coordinate (maximum z)
+    ceiling_z = 10  # Arbitrary value for ceiling height
+    ground_z = 0    # Z-coordinate for the ground level
+    column_width = 0.2
+   # X-coordinate is always 0 (we are only in the y-z plane)
+    x = 0
+
+    # Top column (hanging from the ceiling)
+    # (x, y, z, dx, dy, dz) where (x, y, z) is the bottom-left corner of the cuboid
+    ax.bar3d(
+        x, column_top[0] - column_width / 2, column_top[1],   # Position (x, y, z)
+        0.1, column_width, ceiling_z - column_top[1],        # Size (dx, dy, dz)
+        color='blue', alpha=0.6, label='Top Column'
+    )
+
+    # Bottom column (attached to the ground)
+    ax.bar3d(
+        x, column_bottom[0] - column_width / 2, ground_z,              # Position (x, y, z)
+        0.1, column_width, column_bottom[1] - ground_z,      # Size (dx, dy, dz)
+        color='green', alpha=0.6, label='Bottom Column'
+    )
     # Labels
     ax.set_xlabel('X')
     ax.set_ylabel('Y')

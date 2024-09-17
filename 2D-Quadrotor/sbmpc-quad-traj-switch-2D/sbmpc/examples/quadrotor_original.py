@@ -30,17 +30,18 @@ input_min = jnp.array([0,0])
 mass = 2.7
 mass_payload = 0.25
 cable_length = 0.5
-arm_length = 0.5
+arm_length = 0.4
 gravity = 9.81
 #is_slack = True
 #inertia = jnp.array([2.3951e-5, 2.3951e-5, 3.2347e-5], dtype=jnp.float32)
 #inertia_mat = jnp.diag(inertia)
 
-inertia_slack = 1/12 * (mass) * arm_length**2
-inertia_taut = 1/12 * (mass+ mass_payload) * arm_length**2
+inertia_slack = 1/12 * (mass) * (2*arm_length)**2
+inertia_taut = 1/12 * (mass+ mass_payload) * (2*arm_length)**2
 
 e3 = jnp.array([0.,0.,1.],dtype=jnp.float32)
-
+#spatial_inertia_mat = jnp.diag(jnp.concatenate([mass*jnp.ones(3, dtype=jnp.float32), inertia]))
+#spatial_inertia_mat_inv = jnp.linalg.inv(spatial_inertia_mat)
 
 input_hover = 0.5 * jnp.array([(mass+mass_payload)*gravity, (mass+mass_payload)*gravity], dtype=jnp.float32)
 tension_plt = []
@@ -48,14 +49,14 @@ nq = 7
 
 dt = 0.02
 ### DEFINE SYSTEM STATE and INPUTS ####
-# X = [x, x_L, theta, dotx, dotx_L,theta_dot ] = [14,1]
-#     [3   3 ,   1,     3      3    1]
+# X = [x, x_L, dotx, dotx_L ] = [12,1]
+#     [3   3 ,   3      3    ]
 # x_L, dotx_L= payload position and its velocity
 # x, dotx = drone position and its velocity
 
 
-# U = [u1 ,u2] 
-
+# U = [F] 
+# F = total thrust
 
 
 # Definition of switching mode, I couls define a variable to do the switch
@@ -67,7 +68,26 @@ dt = 0.02
 # Sp represents the system state when the cable becomes taut. When the system state reaches Sp, the system will trigger 
 # an inelastic collision between the payload and the robot along the cable direction and transition to Σp via the reset
 # transition map Deltaz->p
+"""
+def func_slack(state,inputs):        
+        acc_L =  - jnp.array([0.,0.,gravity])
+        
+        acc =  (1/mass)*jnp.array([0.,0.,inputs]) - jnp.array([0.,0.,gravity])
+        print("acc slack",acc)
+        print("acc_L slack",acc_L)
+        print("inputs",inputs)
 
+        ######## state_dot ########
+        state_dot =  jnp.concatenate([state[6:9],
+                            #0.5 * quat_product(quat, ang_vel_quat),
+                            state[9:12],
+                            #orientation_mat @ acc[:3],
+                            acc,
+                            acc_L])
+
+        
+        return state_dot
+"""
 
 
 def normalize_angle(angle):
@@ -204,7 +224,34 @@ def func_taut(state,inputs,csi,csi_dot):
         
     return state_dot
 
+"""
+def func_taut(state,inputs,csi,csi_dot):
 
+    
+    ########## SET ORIGINAL EQUATIONS ###############
+    acc_L = 1/(mass+mass_payload) * ((jnp.dot(csi, jnp.array([0.,0.,inputs])) - mass*cable_length*jnp.dot(csi_dot, csi_dot)) * csi) - jnp.array([0,0,gravity])
+    #acc = spatial_inertia_mat_inv @ jnp.concatenate([total_force, total_torque])
+    primo = jnp.dot(csi, jnp.array([0.,0.,inputs]))
+    secondo = mass*cable_length*jnp.dot(csi_dot, csi_dot)
+    print("acc_L taut",acc_L)
+    
+    ################ Problem with cross product in 2 dimensions !!!!!!!!!!!!!!!!!!!!!!!!! ###############
+    csi_ddot = 1/(mass*cable_length) *  jnp.cross(csi,jnp.cross(csi,jnp.array([0.,0.,inputs])))  -  jnp.dot(csi_dot,csi_dot) * csi
+
+    ## In this case the first term doen't have to be trasposed in world frame since theh drone is always straight ###
+    acc = acc_L -  cable_length * csi_ddot
+    
+    state_dot = jnp.concatenate([state[6:9],
+                            #0.5 * quat_product(quat, ang_vel_quat),
+                            state[9:12],
+                            #orientation_mat @ acc[:3],
+                            acc,
+                            acc_L])
+        
+    #v_kp1 = state[self.nq:] + self.bt * state_dot[-6:]#self.dynamics(state, inputs)[self.nq:]
+        
+    return state_dot
+"""
 
 def handle_collision(state,d,d_dot, csi,csi_dot,is_slack):
     print("d collision",d)
@@ -221,7 +268,21 @@ def handle_collision(state,d,d_dot, csi,csi_dot,is_slack):
         v2 = v_kp1_parallel_drone + state[10:13] - vPayload_proj
 
         print("v1 taut",v1)
-        print("v2 taut",v2)  
+        print("v2 taut",v2)
+        """
+        v_kp1_parallel_drone = (1/(mass+mass_payload)) * ( mass* (csi @ jnp.transpose(csi)) * state[6:9] + mass_payload * (csi @ jnp.transpose(csi)) * state[9:12])
+        
+
+       
+        print("v_kp1_parallel_drone taut",v_kp1_parallel_drone)
+        v_kp1_parallel_payload =  v_kp1_parallel_drone
+
+        v_orthogoal_drone = state[6:9] - state[6:9]*(csi @ csi)
+        v_orthogoal_payload = state[9:12] - state[6:9]*(csi @ csi)
+        
+        v =   v_kp1_parallel_drone + v_orthogoal_drone #+ proj_of_v_on_v_orth 
+        v_payload =  v_kp1_parallel_payload + v_orthogoal_payload #+ proj_of_v_payload_on_v_payload_orth 
+        """           
             
         v_kp1 = state[nq:nq+7]
         v_kp1 =  v_kp1.at[0:3].set(v1) 
@@ -247,8 +308,19 @@ def check_distance(state, csi,csi_dot,is_slack):
     if is_slack == False:
         if uav_attach_distance > cable_length - 0.001:
             csi = uav_attach_vector/uav_attach_distance
-            state = state.at[0:3].set(state[3:6] + (cable_length - 0.001) * csi)
-            #state = state.at[3:6].set(state[0:3] + cable_length * csi)
+            d_initial = uav_attach_distance
+    
+            # Desired final distance
+            d_final = cable_length - 0.001
+            delta_d = jnp.abs(d_initial - d_final)
+            
+            delta_p1 = (mass_payload / (mass + mass_payload)) * delta_d * csi
+            delta_p2 = (mass / (mass + mass_payload)) * delta_d * csi
+            #state = state.at[0:3].set(state[3:6] + (cable_length - 0.001) * csi)
+            #state = state.at[3:6].set(state[0:3] + (cable_length - 0.001) * csi)
+            state = state.at[0:3].set(state[0:3] - delta_p1)
+            state = state.at[3:6].set(state[3:6] + delta_p2)
+            is_slack = False
             
         else:
             is_slack = True
@@ -257,10 +329,35 @@ def check_distance(state, csi,csi_dot,is_slack):
         if uav_attach_distance <= cable_length - 0.001:
             is_slack = True
         else:
+            
+            csi = uav_attach_vector/uav_attach_distance
+            d_initial = uav_attach_distance
+    
+            # Desired final distance
+            d_final = cable_length - 0.001
+            delta_d = jnp.abs(d_initial - d_final)
+            
+            delta_p1 = (mass_payload / (mass + mass_payload)) * delta_d * csi
+            delta_p2 = (mass / (mass + mass_payload)) * delta_d * csi
+            #state = state.at[0:3].set(state[3:6] + (cable_length - 0.001) * csi)
+            #state = state.at[3:6].set(state[0:3] + (cable_length - 0.001) * csi)
+            state = state.at[0:3].set(state[0:3] - delta_p1)
+            state = state.at[3:6].set(state[3:6] + delta_p2)
             is_slack = False
 
     return state, is_slack
     
+"""
+def check_distance(state, csi,csi_dot,is_slack):
+    uav_attach_vector =  state[0:3] - state[3:6]  
+    uav_attach_distance = jnp.linalg.norm(uav_attach_vector)
+    if (uav_attach_distance > cable_length - 0.001):
+        is_slack = False
+    else:
+        is_slack = True
+        
+    return  is_slack
+"""
 
 #@jax.jit
 def quadrotor_dynamics(state: jnp.array, inputs: jnp.array) -> jnp.array:
@@ -282,11 +379,13 @@ def quadrotor_dynamics(state: jnp.array, inputs: jnp.array) -> jnp.array:
     state_dot :jnp.array
         time derivative of state with given inputs
     """
-    
+    #csi = (state[3:6] - state[0:3])/cable_length
 
     csi_dot = (state[7:10] - state[10:13] )/cable_length
     csi = (state[0:3] - state[3:6] )/jnp.linalg.norm(state[0:3] - state[3:6] )
-    
+    #csi_dot = (((state[10:13] - state[7:10])*jnp.linalg.norm(state[3:6] - state[0:3]))-((state[3:6] - state[0:3]) * (state[3:6] - state[0:3]) * (1/jnp.linalg.norm(state[3:6] - state[0:3])) * (state[10:13] - state[7:10])))/(jnp.linalg.norm(state[3:6] - state[0:3]))**2
+    #csi_dot = csi_dot/jnp.linalg.norm(csi_dot)
+    #csi_dot = (state[10:13] - state[7:10])/jnp.linalg.norm(state[10:13] - state[7:10])
     print("csi dynamics",csi)
     print("csi_dot dynamics",csi_dot)
     print("csi NORM dynamics",jnp.linalg.norm(csi))
@@ -305,7 +404,9 @@ def quadrotor_dynamics(state: jnp.array, inputs: jnp.array) -> jnp.array:
     else:  
          return func_slack(state,inputs,csi,csi_dot)
     
-    
+    #elif jnp.logical_and(d - cable_length >= 0.001 , d_dot >= -0.01):   
+    #     return func_taut(state,inputs,csi,csi_dot)
+
 
 
 # NOTE: at the moment there is not reference? And there will be,will it be for the payload or for the drone? 
@@ -375,7 +476,7 @@ class Simulation(simulation.Simulator):
         #input_sequence =  jnp.array([(mass+mass_payload)*gravity/2 , (mass + mass_payload)*gravity/2 ])
 
         # INPUT SINUSOIDAL
-        #input_sequence =  jnp.array([0.5*(mass+mass_payload)*gravity + 10 * jnp.sin(0.05*x) , 0.5*(mass + mass_payload)*gravity + 10 * jnp.sin(0.05*x)])
+        #input_sequence =  jnp.array([0.5*(mass+mass_payload)*gravity + 1 * jnp.sin(0.5*x) , 0.5*(mass + mass_payload)*gravity + 1 * jnp.sin(0.5*x)])
         
         # INPUT ASCENDING WHILE TURNING IN ONE DIRECTION
         #input_sequence =  jnp.array([(mass+mass_payload)*gravity , 0.9* (mass + mass_payload)*gravity])
@@ -408,6 +509,7 @@ class Simulation(simulation.Simulator):
         input_sequence_2 = jnp.tile(input_sequence_2, (400, 1)) 
         input_sequence = jnp.concatenate([input_sequence_1,input_sequence_2],axis=0)
 
+        
         # INPUT CASE SWITCHING 2
         #input_sequence =  jnp.array([-(mass+mass_payload)*gravity/2 - 8  , -(mass + mass_payload)*gravity/2 - 8  ])
         #input_sequence = jnp.tile(input_sequence, (1000, 1)) 
@@ -642,13 +744,13 @@ if __name__ == "__main__":
    
     #plot params
     plt.xlim([0,iterations + 50])
-    plt.ylim([0,500])
+    plt.ylim([0,15.1])
     plt.minorticks_on()
     plt.tick_params(direction='in',right=True, top=True)
     plt.tick_params(labelsize=10)
     plt.tick_params(labelbottom=True, labeltop=False, labelright=False, labelleft=True)
     #xticks = np.arange(0, 1e4,10)
-    yticks = np.arange(0,500.1,25)
+    yticks = np.arange(0,15.1,1)
 
     plt.tick_params(direction='in',which='minor', length=5, bottom=True, top=True, left=True, right=True)
     plt.tick_params(direction='in',which='major', length=10, bottom=True, top=True, left=True, right=True)
@@ -656,16 +758,16 @@ if __name__ == "__main__":
     plt.yticks(yticks)
 
     plt.xlabel('Iteration', fontsize=14) 
-    plt.ylabel('Position',fontsize=14)  # label the y axis
+    plt.ylabel('Position [m]',fontsize=14)  # label the y axis
 
 
     plt.legend(fontsize=14)  # add the legend (will default to 'best' location)
     #plot text and line on top of figure
     plt.axvline(x=10, linestyle='dotted', color='black')
-    plt.text(20.5, 50, 'First Zoom', rotation=90)
+    plt.text(20.5, 3, 'First Zoom', rotation=90)
 
     plt.axvline(x=600, linestyle='dotted', color='purple')
-    plt.text(610.5, 250, 'Second Zoom', rotation=90)
+    plt.text(610.5, 3, 'Second Zoom', rotation=90)
 
     #generate second panel
     xtr_subsplot = fig.add_subplot(gs[0:2,3:4])
@@ -678,7 +780,7 @@ if __name__ == "__main__":
 
     #Define tick parameters
     xticks2 = np.arange(0,100,10)
-    yticks2 = np.arange(0,20.1,1)
+    yticks2 = np.arange(0,15.1,1)
     plt.minorticks_on()
     plt.tick_params(direction='in',which='minor', length=5, 
                     bottom=True, top=True, left=True, right=True)
@@ -702,7 +804,8 @@ if __name__ == "__main__":
 
     #Define tick parameters
     xticks3 = np.arange(590,651,5)
-    yticks3 = np.arange(360,460.1,5)
+    yticks3 = np.arange(0,15.1,1)
+   
     plt.minorticks_on()
     plt.tick_params(direction='in',which='minor', length=5, 
                     bottom=True, top=True, left=True, right=True)
@@ -756,7 +859,7 @@ if __name__ == "__main__":
     plt.yticks(yticks)
 
     plt.xlabel('Iteration', fontsize=14) 
-    plt.ylabel('Drone Velocity',fontsize=14)  # label the y axis
+    plt.ylabel('Drone Velocity [m/s]',fontsize=14)  # label the y axis
 
 
     plt.legend()  # add the legend (will default to 'best' location)
@@ -784,7 +887,7 @@ if __name__ == "__main__":
     plt.xticks(xticks2)
     plt.yticks(yticks2)
     plt.xlabel('Iteration', fontsize=14) 
-    plt.ylabel('Payload Velocity',fontsize=14)  # label the y axis
+    plt.ylabel('Payload Velocity [m/s]',fontsize=14)  # label the y axis
 
     plt.legend()
 
@@ -828,7 +931,7 @@ if __name__ == "__main__":
     plt.yticks(yticks)
 
     plt.xlabel('Iteration', fontsize=14) 
-    plt.ylabel('Theta',fontsize=14)  # label the y axis
+    plt.ylabel('Theta [rad]',fontsize=14)  # label the y axis
 
 
     plt.legend()  # add the legend (will default to 'best' location)
@@ -851,7 +954,7 @@ if __name__ == "__main__":
     plt.xticks(xticks2)
     plt.yticks(yticks2)
     plt.xlabel('Iterations', fontsize=14) 
-    plt.ylabel('Theta Dot',fontsize=14)  # label the y axis
+    plt.ylabel('Theta Dot [rad/s]',fontsize=14)  # label the y axis
 
     plt.legend()
 
@@ -880,7 +983,7 @@ if __name__ == "__main__":
 
 
     plt.xlabel('Iterations', fontsize=14) 
-    plt.ylabel('Cable Length',fontsize=14)  # label the y axis
+    plt.ylabel('Cable Length [m]',fontsize=14)  # label the y axis
 
 
     plt.legend(fontsize=14)  # add the legend (will default to 'best' location)
@@ -891,7 +994,7 @@ if __name__ == "__main__":
     #plot
     fig = plt.figure(1, figsize=(5, 5))
     plt.plot( iterations_array,u1, linestyle='-', label='u1', color=colors2[16], mfc='w', markersize=4) # plot data
-    plt.plot( iterations_array,u1, linestyle='-', label='u2', color=colors[8], mfc='w', markersize=4) # plot data
+    plt.plot( iterations_array,u2, linestyle='-', label='u2', color=colors[8], mfc='w', markersize=4) # plot data
 
     #plt.plot(x_fit, ffit(x_fit), linestyle='-', marker='None', label='fit', color=colors[0], markerfacecolor='white', markersize=8) # plot data
 
@@ -910,7 +1013,7 @@ if __name__ == "__main__":
 
 
     plt.xlabel('Iterations', fontsize=14) 
-    plt.ylabel('Inputs',fontsize=14)  # label the y axis
+    plt.ylabel('Inputs [N]',fontsize=14)  # label the y axis
 
 
     plt.legend(fontsize=14)  # add the legend (will default to 'best' location)
@@ -951,14 +1054,14 @@ for i in range(0,iterations+1):
     
 
     rod2.pos = vector(x[i], z[i], y[i])+ vector(x_dot[i], z_dot[i], y_dot[i])*dt
-    rod2.axis = vector(x[i], z[i]+drone_length*np.sin(theta), y[i]+drone_length*np.cos(theta)) + vector(theta_dot, 0, 0)*dt
+    rod2.axis = vector(x[i], z[i]+arm_length*np.sin(theta), y[i]+arm_length*np.cos(theta)) + vector(theta_dot, 0, 0)*dt
     rod3.pos = vector(x[i], z[i], y[i])+ vector(x_dot[i], z_dot[i], y_dot[i])*dt
-    rod3.axis = vector(x[i], z[i]-drone_length*np.sin(theta), y[i]-drone_length*np.cos(theta)) + vector(theta_dot, 0, 0)*dt
+    rod3.axis = vector(x[i], z[i]- arm_length*np.sin(theta), y[i]-arm_length*np.cos(theta)) + vector(theta_dot, 0, 0)*dt
 """
-
+"""
 import matplotlib.animation as animation
 from matplotlib.animation import FuncAnimation
-"""
+
 xmin = -3
 xmax = 3
 
@@ -983,8 +1086,8 @@ def animate(i):
     #rod1.axis = vector(x[i], z[i], y[i])
     
     line1.set_data([center[0] - center_payload[0], center[1] - center_payload[1]]) 
-    propeller1 = np.array([y[:i+1]+drone_length*np.cos(theta[i+1]), z[:i+1]+drone_length*np.sin(theta[i+1])]) 
-    propeller2 = np.array([y[:i+1]-drone_length*np.cos(theta[i+1]) , z[:i+1]-drone_length*np.sin(theta[i+1])]) 
+    propeller1 = np.array([y[:i+1]+arm_length*np.cos(theta[i+1]), z[:i+1]+arm_length*np.sin(theta[i+1])]) 
+    propeller2 = np.array([y[:i+1]-arm_length*np.cos(theta[i+1]) , z[:i+1]-arm_length*np.sin(theta[i+1])]) 
     line2.set_data(center[0] + propeller1[0],center[1] + propeller1[1])
     line3.set_data(center[0] + propeller2[0],center[1] + propeller2[1])
     return line1, line2, line3
@@ -995,14 +1098,15 @@ ffmpeg_writer = animation.FFMpegFileWriter(fps = 30)
 ani.save('/home/mpiras/MPPI/sbmpc-quad-traj-switch-2D-TEST/sbmpc/quadrotor.mp4', writer=ffmpeg_writer)
 """
 
+
 from mpl_toolkits.mplot3d import Axes3D
 import imageio
 
 #
 
 # Parameters for the output
-output_folder = './frames/'
-output_video = 'drone_positions.mp4'
+output_folder = './frames_sinusoidal_ascending/'
+output_video = 'drone_positions_sinusoidal_ascending.mp4'
 
 zoom_padding = 2.0  # You can adjust this to be more or less zoomed in
 # Drone dimensions
