@@ -16,6 +16,7 @@ class Simulator:
         
         #nx = nq + nv
         self.state_traj = np.zeros((self.num_iter + 1, model.nx))
+        self.vector_isslack = np.zeros((self.num_iter + 1))
         #self.reference = reference
        
         if isinstance(initial_state, (jnp.ndarray, jnp.ndarray)):

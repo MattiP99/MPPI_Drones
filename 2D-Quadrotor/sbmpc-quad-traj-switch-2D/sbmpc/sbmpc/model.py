@@ -40,7 +40,7 @@ class Model(BaseModel):
                  nv: int,
                  nu: int,
                  input_bounds=(-jnp.inf, jnp.inf),
-                 integrator_type="rk4"):
+                 integrator_type="si_euler"):
 
         super().__init__(nq, nv, nu, input_bounds)
 
@@ -67,16 +67,16 @@ class Model(BaseModel):
     def setInitialState(self, state):
         pass
 
-    def integrate_rk4(self, state, inputs, dt: float):
+    def integrate_rk4(self, state, inputs, is_slack, dt: float):
         """
         One-step integration of the dynamics using Rk4 method
         """
 
-        k1 = self.dynamics(state, inputs)
+        k1 = self.dynamics(state, inputs,is_slack)
         
-        k2 = self.dynamics(state + (dt/2) * k1, inputs)
-        k3 = self.dynamics(state + (dt/2) *k2 , inputs)
-        k4 = self.dynamics(state + (dt) * k3 , inputs)
+        k2 = self.dynamics(state + (dt/2) * k1, inputs ,is_slack)
+        k3 = self.dynamics(state + (dt/2) *k2 , inputs ,is_slack)
+        k4 = self.dynamics(state + (dt) * k3 , inputs,is_slack)
 
         result =  state + (dt/6.) * (k1 + 2. * k2 + 2. * k3 + k4) 
         print("rk4",result)
@@ -84,24 +84,23 @@ class Model(BaseModel):
         return result 
         
         
-    def integrate_euler(self, state, inputs, dt: float):
+    def integrate_euler(self, state, inputs,is_slack, dt: float):
         """
         One-step integration of the dynamics using Euler method
         """
-        return state + dt * self.dynamics(state, inputs)
+        return state + dt * self.dynamics(state, inputs,is_slack)
     
 
-    def integrate_si_euler(self, state, inputs, dt: float):
+    def integrate_si_euler(self, state, inputs,is_slack, dt: float):
         """
         Semi-implicit Euler integration.
 
         As of now this is probably implemented inefficiently because the whole dynamics is evaluated two times.
         """
-       
-        v_kp1 = state[self.nq:] + dt * self.dynamics(state, inputs)[self.nq:]
+        v_kp1 = state[self.nq:] + dt * self.dynamics(state, inputs ,is_slack)[self.nq:]
         
         return jnp.concatenate([
-                    state[:self.nq] + dt * self.dynamics(jnp.concatenate([state[:self.nq], v_kp1]), inputs)[:self.nq],
+                    state[:self.nq] + dt * self.dynamics(jnp.concatenate([state[:self.nq], v_kp1]), inputs,is_slack)[:self.nq],
                       v_kp1])
         
 

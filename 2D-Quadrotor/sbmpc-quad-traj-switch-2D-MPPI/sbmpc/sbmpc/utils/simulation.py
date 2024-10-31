@@ -4,14 +4,16 @@ import mujoco.mjx as mjx
 
 
 class Simulator:
-    def __init__(self, initial_state, model, controller,is_slack, num_iter=1000):
+    def __init__(self, initial_state, model, controller,is_slack, reference, num_iter=1000):
         self.iter = 0
         self.current_state = initial_state
         self.model = model
         self.controller = controller
         self.num_iter = num_iter
         self.state_traj = np.zeros((self.num_iter + 1, model.nx))
-        #self.reference = jnp.zeros((num_iter, 16),dtype=jnp.float32)
+        self.vector_isslack = np.zeros((self.num_iter + 1))
+
+        self.reference = reference
         self.is_slack = is_slack
         if isinstance(initial_state, (jnp.ndarray, jnp.ndarray)):
             self.current_state_vec = lambda: self.current_state

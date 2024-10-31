@@ -2,7 +2,7 @@ from sbmpc.model import BaseModel, ModelMjx, Model
 from sbmpc.utils.settings import ConfigMPC, ConfigGeneral
 from sbmpc.utils.filter import MovingAverage
 from sbmpc.utils.simulation import Simulator
-
+import numpy as np
 import jax.numpy as jnp
 import jax
 
@@ -70,7 +70,7 @@ class SbMPC:
         self.master_key = jax.random.PRNGKey(420)
         self.initial_random_parameters = jnp.zeros((self.num_parallel_computations, self.num_control_variables),
                                                    dtype=self.dtype_general)
-
+        self.visualize_trajecotry = []
         # Initialize the vector storing the current optimal input sequence
         if config_mpc.initial_guess is None:
             
@@ -107,6 +107,8 @@ class SbMPC:
         return jnp.clip(control_variables, self.input_min_full_horizon, self.input_max_full_horizon)
 
     def compute_rollout(self, initial_state, reference, control_variables):
+
+        
         """
         !!! As of now this only works for the classic model !!!
 
@@ -124,6 +126,8 @@ class SbMPC:
         cost : float
             cost of the rollout
         """
+         
+
         def iterate_fun(idx, carry):
             sum_cost, curr_state, reference = carry
 
@@ -166,11 +170,18 @@ class SbMPC:
         current_input = jax.lax.dynamic_slice(control_variables,
                                               (0, idx * self.model.nu),
                                               (self.num_parallel_computations, self.model.nu))
-        #jax.debug.print("{current_input}", current_input = current_input)
+        #jax.debug.print("{current_input}", current_input = len(current_input[1]))
             
         running_cost = self.running_cost(state, current_input, reference[idx, :])
         # Integrate the dynamics
         state_next = self.model.integrate_rollout(state, current_input, self.dt)
+        #jax.debug.print("{state_next1}", state_next1 = len(state_next[0]))
+        
+        
+        self.visualize_trajecotry.extend(state_next)
+        #jax.debug.print("{visualize_trajecotry}", visualize_trajecotry = len(self.visualize_trajecotry))
+        #jax.debug.print("{visualize_trajecotry}", visualize_trajecotry = len(self.visualize_trajecotry[0]))
+        #jax.debug.print("{visualize_trajecotry}", visualize_trajecotry = len(self.visualize_trajecotry[1]))
         return running_cost, state_next
 
     def compute_control_mppi(self, state, reference, best_control_vars, key):
@@ -206,18 +217,23 @@ class SbMPC:
         #                                                    cov=self.sigma_mppi,
         #                                                    shape=(num_sample_gaussian_1, self.horizon)).reshape(
         #     num_sample_gaussian_1, self.num_control_variables))
-
+        
         sampled_variation = jax.random.normal(key=key, shape=(num_sample_gaussian_1, self.num_control_variables)) * self.std_dev_horizon
 
         additional_random_parameters = additional_random_parameters.at[1:self.num_parallel_computations].set(sampled_variation)
 
         # Compute the candidate control sequences considering input constraints
+        # FILTER
+        
         control_vars_all = self.moving_average.filter_batch(self.clip_input(best_control_vars + additional_random_parameters),
                                                              self.last_inputs_window,
                                                              jnp.array(()))
+        
+                                                             
         #control_vars_all = self.clip_input(best_control_vars + additional_random_parameters)
+        
         additional_random_parameters_clipped = control_vars_all - best_control_vars
-
+        
         # Do rollout
         costs = self.jit_vectorized_rollout(state, reference, control_vars_all)
 
@@ -310,7 +326,7 @@ class SbMPC:
         in IEEE Transactions on Robotics, vol. 39, no. 3, pp. 1929-1946, June 2023, doi: 10.1109/TRO.2022.3233343.
         """
 
-        h = 20.
+        h = 15.
         exp_costs = jnp.exp(- h * (costs - best_cost) / (worst_cost - best_cost))
 
         return exp_costs

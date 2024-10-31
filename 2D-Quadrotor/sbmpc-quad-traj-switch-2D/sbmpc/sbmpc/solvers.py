@@ -206,6 +206,7 @@ class SbMPC:
         control_vars_all = self.moving_average.filter_batch(self.clip_input(best_control_vars + additional_random_parameters),
                                                             self.last_inputs_window,
                                                             jnp.array(()))
+        
         additional_random_parameters_clipped = control_vars_all - best_control_vars
 
         # Do rollout

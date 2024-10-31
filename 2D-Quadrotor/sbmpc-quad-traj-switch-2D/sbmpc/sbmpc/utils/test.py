@@ -62,7 +62,7 @@ print("csi_dot",csi_dot)
 print("csi csiT",csi * jnp.transpose(csi))
 print("csi csi",csi * csi)
 print("csi @ csiT",csi @ jnp.transpose(csi))
-print("csiT @ csi",jnp.transpose(csi) @ csi)
+print("csiT @ csi",csi.reshape((1,3)) @ csi.reshape((3,1)))
 print("csiT @ csi new", csi.reshape((3,1)) @ csi.reshape((1,3)))
 
 
@@ -103,9 +103,24 @@ print("input_sequence",input_sequence)
 input_traj = jnp.zeros((5000,2))
 
 
-for i in range(5000):
-    input_traj = input_traj.at[i, :].set(input_sequence[:, i]) 
+#for i in range(5000):
+#    input_traj = input_traj.at[i, :].set(input_sequence[:, i]) 
 
-print("input_traj",input_traj.shape)
+#print("input_traj",input_traj.shape)
 comp = 1/2* jnp.pi * jnp.sqrt(9.81/0.5)
 print("comp",comp)
+
+temporal =  (state[3:6] - state[0:3]) @ (state[0:3] - state[3:6])
+print("temporal",temporal)
+
+e3 = jnp.array([0.,0.,1.],dtype=jnp.float32)
+csi_omega = jnp.cross(csi, csi_dot)
+
+F =  2*((mass+mass_payload)*gravity + 8)
+csi = jnp.array([0,0,1])
+quad_force_vector = F * rotation_matrix_around_x(state[6]) @ e3  
+quad_centrifugal_f = mass * cable_length * (csi_omega @ csi_omega)
+F_d = quad_force_vector + quad_centrifugal_f  - gravity * e3
+F_p =  quad_centrifugal_f  - gravity * e3
+tension_vector = (((F_d) @ (-csi)) / mass - ((F_p) @ (-csi)) / mass_payload ) / (1/mass + 1/mass_payload)
+print("tension_vector",tension_vector)
